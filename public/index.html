@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="en" data-theme="ember">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+    <meta name="theme-color" content="#100d0b" />
+    <title>grindwell</title>
+    <meta name="description" content="A tiny habit tracker: did I do it today?" />
+    <link
+      rel="icon"
+      href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23ff7a2f' d='M12.6 2.2c.4 3.3-1.4 4.9-2.9 6.6C8 10.7 6.4 12.6 6.4 15a5.6 5.6 0 0 0 11.2 0c0-2.3-1-4.2-2.5-5.7-.2 1.5-1 2.5-2 2.8.5-3.3-.1-6.9-1.5-9.9Z'/></svg>"
+    />
+    <script>
+      // Apply a saved theme before first paint so there is no colour flash.
+      try {
+        var savedTheme = localStorage.getItem('grindwell.theme');
+        if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
+      } catch (error) {
+        /* storage unavailable; keep the default theme */
+      }
+    </script>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <main class="app">
+      <header class="top">
+        <div class="brand">
+          <span class="mark" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <path
+                d="M12.6 2.2c.4 3.3-1.4 4.9-2.9 6.6C8 10.7 6.4 12.6 6.4 15a5.6 5.6 0 0 0 11.2 0c0-2.3-1-4.2-2.5-5.7-.2 1.5-1 2.5-2 2.8.5-3.3-.1-6.9-1.5-9.9Z"
+              />
+            </svg>
+          </span>
+          <div>
+            <h1>grindwell</h1>
+            <p class="date" id="date">today</p>
+          </div>
+        </div>
+
+        <div class="top-actions">
+          <div class="theme" id="theme">
+            <button
+              class="theme-toggle"
+              id="theme-toggle"
+              type="button"
+              aria-expanded="false"
+              aria-controls="theme-panel"
+              aria-label="Choose theme color"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.7 1.6-1.7 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.7 1.7-1.7h2c3 0 5.5-2.5 5.5-5.5C22 6 17.5 2 12 2Z"
+                />
+                <circle cx="7.5" cy="11.5" r="1.25" />
+                <circle cx="9.5" cy="7.5" r="1.25" />
+                <circle cx="13.5" cy="7" r="1.25" />
+                <circle cx="17" cy="11.5" r="1.25" />
+              </svg>
+            </button>
+
+            <div class="theme-panel" id="theme-panel" hidden>
+              <p class="theme-title">Theme</p>
+              <div class="swatches" id="theme-swatches" role="group" aria-label="Theme color"></div>
+            </div>
+          </div>
+
+          <button
+            class="reset"
+            id="reset-habits"
+            type="button"
+            title="Delete this profile's habits and history"
+            aria-label="Reset all habits for this profile"
+          >
+            Reset
+          </button>
+        </div>
+      </header>
+
+      <section class="profile-bar" aria-label="Profiles">
+        <span class="profile-label">Profiles</span>
+        <div class="profile-pills" id="profile-pills" role="group" aria-label="Switch profile"></div>
+        <button
+          class="profile-add"
+          id="profile-add"
+          type="button"
+          title="Add a profile"
+          aria-label="Add a profile"
+        >
+          +
+        </button>
+      </section>
+
+      <section class="progress-card" aria-live="polite">
+        <p class="progress-text">
+          <strong id="done-count">0</strong> of <span id="total-count">0</span> done today
+        </p>
+        <div
+          class="bar"
+          role="progressbar"
+          aria-label="Habits completed today"
+          aria-valuemin="0"
+          aria-valuemax="100"
+          aria-valuenow="0"
+          id="bar"
+        >
+          <div class="bar-fill" id="bar-fill"></div>
+        </div>
+        <p class="hint" id="hint">Nothing here yet.</p>
+      </section>
+
+      <form class="add" id="add-form" autocomplete="off">
+        <div class="add-row">
+          <label class="sr-only" for="habit-input">New habit</label>
+          <input
+            class="text-input"
+            id="habit-input"
+            name="name"
+            type="text"
+            placeholder="Read 10 pages ; 6 ; sat,sun"
+            maxlength="100"
+            required
+          />
+          <button type="submit">Add</button>
+        </div>
+      </form>
+
+      <ul class="habits" id="habit-list" aria-label="Habits"></ul>
+
+      <p class="empty" id="empty">No habits yet. Add your first one above.</p>
+    </main>
+
+    <script src="/habit-input.js"></script>
+    <script src="/app.js"></script>
+  </body>
+</html>

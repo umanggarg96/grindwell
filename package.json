@@ -1,0 +1,14 @@
+{
+  "name": "grindwell",
+  "version": "1.0.0",
+  "private": true,
+  "description": "A tiny, self-hosted habit tracker: did I do it today?",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node --watch server.js"
+  },
+  "engines": {
+    "node": ">=18"
+  }
+}
