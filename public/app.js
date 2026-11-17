@@ -19,6 +19,12 @@ const els = {
   bar: document.getElementById('bar'),
   barFill: document.getElementById('bar-fill'),
   hint: document.getElementById('hint'),
+  etherTotal: document.getElementById('ether-total'),
+  etherToday: document.getElementById('ether-today'),
+  etherWeek: document.getElementById('ether-week'),
+  etherChart: document.getElementById('ether-chart'),
+  etherForm: document.getElementById('ether-form'),
+  etherFactor: document.getElementById('ether-factor'),
 };
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -41,6 +47,8 @@ const THEME_KEY = 'grindwell.theme';
 let habits = [];
 let profiles = [];
 let activeProfile = null;
+let ether = null;
+let settings = { etherFactor: 1 };
 let today = '';
 let toastTimer = null;
 let editingId = null;
@@ -299,6 +307,72 @@ async function deleteProfile(profile) {
   }
 }
 
+/* ---------- ether ---------- */
+
+function renderEther() {
+  if (!ether) return;
+
+  els.etherTotal.textContent = String(ether.total);
+  els.etherToday.textContent = String(ether.today);
+  els.etherWeek.textContent = String(ether.last7);
+
+  if (document.activeElement !== els.etherFactor) {
+    els.etherFactor.value = String(settings.etherFactor);
+  }
+
+  const max = Math.max(1, ...ether.days.map((day) => day.ether));
+  const nodes = ether.days.map((day) => {
+    const [year, month, date] = day.date.split('-').map(Number);
+    const label = DAY_SHORT[new Date(year, month - 1, date).getDay()];
+
+    const column = document.createElement('div');
+    column.className = 'ether-day' + (day.date === today ? ' is-today' : '');
+
+    const value = document.createElement('span');
+    value.className = 'ether-day-value';
+    value.textContent = String(day.ether);
+
+    const track = document.createElement('div');
+    track.className = 'ether-bar-track';
+
+    const bar = document.createElement('div');
+    bar.className = 'ether-bar';
+    bar.style.height = `${Math.round((day.ether / max) * 100)}%`;
+    track.append(bar);
+
+    const name = document.createElement('span');
+    name.className = 'ether-day-label';
+    name.textContent = label;
+
+    column.append(value, track, name);
+    column.title = `${day.date}: ${plural(day.ether, 'ether')}`;
+    return column;
+  });
+
+  els.etherChart.replaceChildren(...nodes);
+}
+
+async function saveEtherFactor(event) {
+  event.preventDefault();
+  const factor = Number(els.etherFactor.value);
+
+  if (!Number.isFinite(factor) || factor < 0.1 || factor > 10) {
+    toast('Ether factor must be between 0.1 and 10.');
+    return;
+  }
+
+  try {
+    settings = await api('/api/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ etherFactor: factor }),
+    });
+    await load({ silent: true });
+    toast(`Reward rate set to ${settings.etherFactor} ether per difficulty point.`);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 /* ---------- rendering ---------- */
 
 function habitNode(habit) {
@@ -353,7 +427,12 @@ function habitNode(habit) {
   difficulty.textContent = `Difficulty ${habit.difficulty}/10`;
   difficulty.title = `${band.word[0].toUpperCase()}${band.word.slice(1)} difficulty`;
 
-  meta.append(streak, difficulty);
+  const reward = document.createElement('span');
+  reward.className = 'chip chip-ether';
+  reward.textContent = `+${habit.reward} ether`;
+  reward.title = `Earn ${plural(habit.reward, 'ether')} when you complete this`;
+
+  meta.append(streak, difficulty, reward);
 
   if (!habit.dueToday) {
     const rest = document.createElement('span');
@@ -541,6 +620,8 @@ async function load({ silent = false } = {}) {
     habits = data.habits;
     profiles = data.profiles;
     activeProfile = data.profile;
+    ether = data.ether;
+    settings = data.settings || { etherFactor: ether.factor };
     today = data.today;
 
     applyTheme(activeProfile.theme);
@@ -553,6 +634,7 @@ async function load({ silent = false } = {}) {
     });
 
     render();
+    renderEther();
   } catch (error) {
     if (!silent) toast(`Could not load habits: ${error.message}`);
   }
@@ -568,6 +650,7 @@ async function toggleHabit(id) {
   }
 
   const next = !habit.doneToday;
+  const earnedBefore = habit.earnedToday || 0;
 
   // Optimistic update so the tap feels instant. Streak is left alone; the
   // server recomputes it against the habit's schedule.
@@ -580,7 +663,25 @@ async function toggleHabit(id) {
       body: JSON.stringify({ done: next }),
     });
     Object.assign(habit, updated);
+
+    // Keep the dashboard in sync without a full reload. The server locks in
+    // the reward, so use the amount it reports.
+    if (ether) {
+      const delta = updated.earnedToday - earnedBefore;
+      if (delta !== 0) {
+        ether.total += delta;
+        ether.today += delta;
+        ether.last7 += delta;
+        const todayBucket = ether.days[ether.days.length - 1];
+        if (todayBucket && todayBucket.date === today) {
+          todayBucket.ether = Math.max(0, todayBucket.ether + delta);
+        }
+        renderEther();
+      }
+    }
+
     render();
+    if (next) toast(`+${updated.earnedToday || updated.reward} ether earned`);
   } catch (error) {
     toast(error.message);
     await load({ silent: true });
@@ -593,7 +694,7 @@ async function deleteHabit(habit) {
   try {
     await api(`/api/habits/${habit.id}`, { method: 'DELETE' });
     habits = habits.filter((item) => item.id !== habit.id);
-    render();
+    await load({ silent: true });
   } catch (error) {
     toast(error.message);
   }
@@ -614,7 +715,7 @@ async function resetHabits() {
     habits = [];
     editingId = null;
     editDraft = null;
-    render();
+    await load({ silent: true });
     toast('All habits cleared.');
   } catch (error) {
     toast(error.message);
@@ -710,6 +811,7 @@ document.addEventListener('keydown', (event) => {
 
 els.profileAdd.addEventListener('click', createProfile);
 els.reset.addEventListener('click', resetHabits);
+els.etherForm.addEventListener('submit', saveEtherFactor);
 
 els.form.addEventListener('submit', async (event) => {
   event.preventDefault();

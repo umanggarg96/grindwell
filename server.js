@@ -20,6 +20,11 @@ const DEFAULT_DIFFICULTY = 5;
 const DEFAULT_THEME = 'ember';
 const THEME_IDS = ['ember', 'blue', 'teal', 'green', 'lime', 'violet', 'rose'];
 const MAX_PROFILES = 20;
+// Ether is a linear reward: max(1, round(difficulty * factor)). One global
+// factor keeps tuning simple; earned ether is stored per completion date.
+const DEFAULT_ETHER_FACTOR = 1;
+const MIN_ETHER_FACTOR = 0.1;
+const MAX_ETHER_FACTOR = 10;
 // JavaScript weekday numbers: 0 = Sunday ... 6 = Saturday.
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 
@@ -34,7 +39,11 @@ const MIME_TYPES = {
   '.webmanifest': 'application/manifest+json',
 };
 
-let state = { profiles: [], activeProfileId: null };
+let state = {
+  settings: { etherFactor: DEFAULT_ETHER_FACTOR },
+  profiles: [],
+  activeProfileId: null,
+};
 let saveChain = Promise.resolve();
 
 /* ---------- helpers ---------- */
@@ -134,19 +143,90 @@ function difficultyOf(habit) {
     : DEFAULT_DIFFICULTY;
 }
 
+function rewardFor(difficulty, factor = DEFAULT_ETHER_FACTOR) {
+  return Math.max(1, Math.round(difficulty * factor));
+}
+
+function etherFactorOf(value) {
+  return Number.isFinite(value) && value >= MIN_ETHER_FACTOR && value <= MAX_ETHER_FACTOR
+    ? Math.round(value * 100) / 100
+    : DEFAULT_ETHER_FACTOR;
+}
+
+function parseEtherFactor(value) {
+  const factor = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(factor)) {
+    throw httpError(400, 'Ether factor must be a number.');
+  }
+  if (factor < MIN_ETHER_FACTOR || factor > MAX_ETHER_FACTOR) {
+    throw httpError(
+      400,
+      `Ether factor must be between ${MIN_ETHER_FACTOR} and ${MAX_ETHER_FACTOR}.`,
+    );
+  }
+  return Math.round(factor * 100) / 100;
+}
+
+function earningsOf(habit) {
+  return habit.earnings && typeof habit.earnings === 'object' && !Array.isArray(habit.earnings)
+    ? habit.earnings
+    : {};
+}
+
+function etherTotal(profile) {
+  let total = 0;
+  for (const habit of profile.habits || []) {
+    for (const value of Object.values(earningsOf(habit))) {
+      if (Number.isInteger(value) && value > 0) total += value;
+    }
+  }
+  return total;
+}
+
+function etherSummary(profile) {
+  const byDate = new Map();
+  for (const habit of profile.habits || []) {
+    for (const [date, value] of Object.entries(earningsOf(habit))) {
+      if (!Number.isInteger(value) || value < 1) continue;
+      byDate.set(date, (byDate.get(date) || 0) + value);
+    }
+  }
+
+  const now = new Date();
+  const days = [];
+  for (let offset = 6; offset >= 0; offset -= 1) {
+    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
+    const key = dayKey(date);
+    days.push({ date: key, ether: byDate.get(key) || 0 });
+  }
+
+  return {
+    factor: state.settings.etherFactor,
+    total: [...byDate.values()].reduce((sum, value) => sum + value, 0),
+    today: byDate.get(dayKey(now)) || 0,
+    last7: days.reduce((sum, day) => sum + day.ether, 0),
+    days,
+  };
+}
+
 function toPublic(habit) {
   const completions = Array.isArray(habit.completions) ? habit.completions : [];
   const days = daysOf(habit);
   const today = new Date();
+  const todayKey = dayKey(today);
+  const difficulty = difficultyOf(habit);
+  const earned = earningsOf(habit)[todayKey];
   return {
     id: habit.id,
     name: habit.name,
     createdAt: habit.createdAt,
-    difficulty: difficultyOf(habit),
+    difficulty,
     days,
     dueToday: days.includes(today.getDay()),
-    doneToday: completions.includes(dayKey(today)),
+    doneToday: completions.includes(todayKey),
     streak: currentStreak(completions, days),
+    reward: rewardFor(difficulty, state.settings.etherFactor),
+    earnedToday: Number.isInteger(earned) && earned > 0 ? earned : 0,
   };
 }
 
@@ -189,16 +269,43 @@ function toPublicProfile(profile) {
     name: profile.name,
     theme: profile.theme,
     habitCount: (profile.habits || []).length,
+    ether: etherTotal(profile),
   };
 }
 
-function normalizeHabit(habit) {
+function normalizeHabit(habit, factor = DEFAULT_ETHER_FACTOR) {
   const days = daysOf(habit);
+  const completions = Array.isArray(habit.completions)
+    ? [...new Set(habit.completions.filter((date) => typeof date === 'string'))].sort()
+    : [];
+
+  // Backfill earnings for completions that predate the reward system. Once a
+  // date has an amount it is kept, so later factor/difficulty changes only
+  // affect future completions.
+  const existing = earningsOf(habit);
+  const earnings = {};
+  for (const date of completions) {
+    const value = existing[date];
+    earnings[date] =
+      Number.isInteger(value) && value > 0
+        ? value
+        : rewardFor(difficultyOf(habit), factor);
+  }
+
+  const earningsChanged =
+    Object.keys(existing).length !== Object.keys(earnings).length ||
+    Object.entries(earnings).some(([date, value]) => existing[date] !== value);
+
   const changed =
     !Array.isArray(habit.days) ||
     habit.days.length !== days.length ||
-    habit.days.some((day, index) => day !== days[index]);
-  return { habit: { ...habit, days }, changed };
+    habit.days.some((day, index) => day !== days[index]) ||
+    !Array.isArray(habit.completions) ||
+    habit.completions.length !== completions.length ||
+    habit.completions.some((date, index) => date !== completions[index]) ||
+    earningsChanged;
+
+  return { habit: { ...habit, days, completions, earnings }, changed };
 }
 
 /* ---------- persistence ---------- */
@@ -211,6 +318,8 @@ async function loadState() {
     if (parsed && Array.isArray(parsed.profiles) && parsed.profiles.length > 0) {
       let changed = false;
       const profiles = [];
+      const etherFactor = etherFactorOf(parsed.settings && parsed.settings.etherFactor);
+      if (etherFactor !== (parsed.settings && parsed.settings.etherFactor)) changed = true;
 
       for (const profile of parsed.profiles) {
         if (!profile || typeof profile.id !== 'string') {
@@ -219,7 +328,7 @@ async function loadState() {
         }
 
         const habits = (Array.isArray(profile.habits) ? profile.habits : []).map((habit) => {
-          const normalized = normalizeHabit(habit);
+          const normalized = normalizeHabit(habit, etherFactor);
           if (normalized.changed) changed = true;
           return normalized.habit;
         });
@@ -243,7 +352,7 @@ async function loadState() {
         : profiles[0].id;
       if (activeProfileId !== parsed.activeProfileId) changed = true;
 
-      state = { profiles, activeProfileId };
+      state = { settings: { etherFactor }, profiles, activeProfileId };
       if (changed) await saveState();
       return;
     }
@@ -251,9 +360,15 @@ async function loadState() {
     // Old single-profile file: keep its habits inside the first profile.
     const profile = makeProfile('Mine');
     if (parsed && Array.isArray(parsed.habits)) {
-      profile.habits = parsed.habits.map((habit) => normalizeHabit(habit).habit);
+      profile.habits = parsed.habits.map(
+        (habit) => normalizeHabit(habit, DEFAULT_ETHER_FACTOR).habit,
+      );
     }
-    state = { profiles: [profile], activeProfileId: profile.id };
+    state = {
+      settings: { etherFactor: DEFAULT_ETHER_FACTOR },
+      profiles: [profile],
+      activeProfileId: profile.id,
+    };
     await saveState();
   } catch (error) {
     if (error.code !== 'ENOENT') {
@@ -261,7 +376,11 @@ async function loadState() {
     }
     if (state.profiles.length === 0) {
       const profile = makeProfile('Mine');
-      state = { profiles: [profile], activeProfileId: profile.id };
+      state = {
+        settings: { etherFactor: DEFAULT_ETHER_FACTOR },
+        profiles: [profile],
+        activeProfileId: profile.id,
+      };
       await saveState();
     }
   }
@@ -375,6 +494,26 @@ async function handleApi(req, res, pathname) {
     return sendJson(res, 200, { ok: true, today: dayKey() });
   }
 
+  if (pathname === '/api/settings') {
+    if (req.method === 'GET') {
+      return sendJson(res, 200, state.settings);
+    }
+
+    if (req.method === 'PATCH') {
+      const body = await readJson(req);
+      const updates = {};
+      if (body.etherFactor !== undefined) {
+        updates.etherFactor = parseEtherFactor(body.etherFactor);
+      }
+      if (Object.keys(updates).length === 0) throw httpError(400, 'Nothing to update.');
+      Object.assign(state.settings, updates);
+      await saveState();
+      return sendJson(res, 200, state.settings);
+    }
+
+    throw httpError(405, 'Method not allowed.');
+  }
+
   if (pathname === '/api/profiles') {
     if (req.method === 'GET') {
       return sendJson(res, 200, {
@@ -450,6 +589,8 @@ async function handleApi(req, res, pathname) {
         habits: profile.habits.map(toPublic),
         profile: toPublicProfile(profile),
         profiles: state.profiles.map(toPublicProfile),
+        settings: state.settings,
+        ether: etherSummary(profile),
       });
     }
 
@@ -466,6 +607,7 @@ async function handleApi(req, res, pathname) {
         difficulty: body.difficulty === undefined ? DEFAULT_DIFFICULTY : parseDifficulty(body.difficulty),
         days: parseDays(body.days),
         completions: [],
+        earnings: {},
       };
       profile.habits.push(habit);
       await saveState();
@@ -502,10 +644,21 @@ async function handleApi(req, res, pathname) {
       throw httpError(400, 'This habit is not scheduled for today.');
     }
 
-    if (shouldBeDone) completions.add(today);
-    else completions.delete(today);
+    // Lock in the reward at completion time so later difficulty or factor
+    // changes cannot rewrite history.
+    const earnings = { ...earningsOf(habit) };
+    if (shouldBeDone) {
+      completions.add(today);
+      if (!Number.isInteger(earnings[today]) || earnings[today] < 1) {
+        earnings[today] = rewardFor(difficultyOf(habit), state.settings.etherFactor);
+      }
+    } else {
+      completions.delete(today);
+      delete earnings[today];
+    }
 
     habit.completions = [...completions].sort();
+    habit.earnings = earnings;
     await saveState();
     return sendJson(res, 200, toPublic(habit));
   }

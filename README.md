@@ -1,6 +1,6 @@
 # grindwell
 
-A tiny, zero-dependency habit tracker. One job: mark whether you did each habit **today**. Habits carry a difficulty from 1 to 10 and a weekly schedule (daily by default), and streaks are tracked because they come for free once you store completed dates. Several people can share one server: each **profile** has its own habits, progress, and colour theme.
+A tiny, zero-dependency habit tracker. One job: mark whether you did each habit **today**. Habits carry a difficulty from 1 to 10 and a weekly schedule (daily by default), and streaks are tracked because they come for free once you store completed dates. Completing a habit also earns **ether**, a configurable reward based on difficulty, with a per-day dashboard. Several people can share one server: each **profile** has its own habits, progress, ether balance, and colour theme.
 
 Built to live on a homelab. No accounts, no database server, no build step — just Node and one JSON file.
 
@@ -52,11 +52,30 @@ The active profile is stored on the server, so switching on one device changes t
 everywhere. Because there is no authentication, anyone who can reach the server can switch or
 edit any profile — keep it on a trusted LAN or behind a reverse proxy with auth.
 
+## Ether rewards
+
+Each completion earns ether using a linear rate:
+
+```text
+ether = max(1, round(difficulty × factor))
+```
+
+- The **factor** is one global setting, default **1**, so difficulty 4 earns 4 ether. It can be
+  set between `0.1` and `10` in the dashboard (or with `PATCH /api/settings`). The `max(1, …)`
+  floor means even a difficulty-1 habit always earns at least one ether.
+- Rewards are **locked in when you check a habit**. Changing the factor or editing a habit's
+  difficulty later only affects future completions, so your history and weekly trends stay put.
+- Unchecking a habit removes that day's ether.
+- The dashboard shows the profile's total balance, ether earned today, ether over the last seven
+  days, and a bar for each day. Switching profiles switches the balance because ether is stored
+  per profile.
+- There is no streak bonus; difficulty is the only input.
+
 ## Resetting
 
-The **Reset** button in the header deletes every habit and its completion history for the
-currently active profile after a confirmation. There is no undo, so back up `data.json` first if
-you might want it back. Profiles and their themes are left alone.
+The **Reset** button in the header deletes every habit, its completion history, and its earned
+ether for the currently active profile after a confirmation. There is no undo, so back up
+`data.json` first if you might want it back. Profiles and their themes are left alone.
 
 ## Configuration
 
@@ -78,6 +97,9 @@ Everything lives in `data.json` (gitignored):
 
 ```json
 {
+  "settings": {
+    "etherFactor": 1
+  },
   "profiles": [
     {
       "id": "9f12...",
@@ -91,7 +113,8 @@ Everything lives in `data.json` (gitignored):
           "createdAt": "2026-11-17T08:00:00.000Z",
           "difficulty": 4,
           "days": [1, 2, 3, 4, 5],
-          "completions": ["2026-11-16", "2026-11-17"]
+          "completions": ["2026-11-16", "2026-11-17"],
+          "earnings": { "2026-11-16": 4, "2026-11-17": 4 }
         }
       ]
     }
@@ -100,7 +123,11 @@ Everything lives in `data.json` (gitignored):
 }
 ```
 
-Completed dates are stored as local `YYYY-MM-DD` keys, so streaks survive restarts. Back the file up by copying it; move machines by taking it with you. Older single-profile files (a top-level `habits` array) are migrated into a profile named **Mine** on startup.
+Completed dates are stored as local `YYYY-MM-DD` keys, so streaks survive restarts. `earnings`
+records the ether awarded for each of those dates. Back the file up by copying it; move machines
+by taking it with you. Older single-profile files (a top-level `habits` array) are migrated into a
+profile named **Mine** on startup, and completions from before the reward system are backfilled
+using the current factor and difficulty.
 
 ## Homelab notes
 
@@ -124,7 +151,9 @@ docker run -d --name grindwell -p 3000:3000 -v grindwell-data:/data grindwell
 | `PATCH`  | `/api/profiles/:id`        | any of `name`, `theme`                        | Updated profile           |
 | `POST`   | `/api/profiles/:id/activate` | —                                           | Updated active profile    |
 | `DELETE` | `/api/profiles/:id`        | —                                             | `204`                     |
-| `GET`    | `/api/habits`              | —                                             | `{ today, habits[], profile, profiles[] }` |
+| `GET`    | `/api/settings`            | —                                             | `{ etherFactor }`         |
+| `PATCH`  | `/api/settings`            | `{ "etherFactor": 0.5 }`                      | Updated settings          |
+| `GET`    | `/api/habits`              | —                                             | `{ today, habits[], profile, profiles[], settings, ether }` |
 | `POST`   | `/api/habits`              | `{ "name": "...", "difficulty": 5, "days": [1,3,5] }` | Created habit     |
 | `PATCH`  | `/api/habits/:id`          | any of `name`, `difficulty`, `days`           | Updated habit             |
 | `DELETE` | `/api/habits`              | —                                             | `204`                     |
@@ -133,9 +162,25 @@ docker run -d --name grindwell -p 3000:3000 -v grindwell-data:/data grindwell
 | `GET`    | `/api/health`              | —                                             | `{ ok, today }`           |
 
 All `/api/habits` routes apply to the **active profile**. A profile summary is
-`{ id, name, theme, habitCount }`. `theme` must be one of the palette ids below; it defaults to
-`ember`. Creating a profile switches to it, and deleting the active profile switches to the first
-remaining one. The last profile cannot be deleted.
+`{ id, name, theme, habitCount, ether }`. `theme` must be one of the palette ids below; it
+defaults to `ember`. Creating a profile switches to it, and deleting the active profile switches
+to the first remaining one. The last profile cannot be deleted.
+
+`GET /api/habits` also returns the active profile's `ether` summary:
+
+```json
+{
+  "factor": 1,
+  "total": 42,
+  "today": 9,
+  "last7": 28,
+  "days": [{ "date": "2026-11-11", "ether": 4 }, "… seven days ending today"]
+}
+```
+
+Each public habit includes `reward` (what completing it today would earn) and `earnedToday`.
+`PATCH /api/settings` changes the global factor; it accepts values from `0.1` to `10` and only
+affects future completions.
 
 `difficulty` must be a whole number from 1 to 10 and defaults to `5` when omitted.
 `days` is an array of weekdays using `0 = Sunday ... 6 = Saturday`; it defaults to all seven
