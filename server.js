@@ -20,6 +20,9 @@ const DEFAULT_DIFFICULTY = 5;
 const DEFAULT_THEME = 'ember';
 const THEME_IDS = ['ember', 'blue', 'teal', 'green', 'lime', 'violet', 'rose'];
 const MAX_PROFILES = 20;
+const MAX_SHOP_ITEMS = 100;
+const MAX_ITEM_COST = 1000000;
+const MAX_URL_LENGTH = 500;
 // Ether is a linear reward: max(1, round(difficulty * factor)). One global
 // factor keeps tuning simple; earned ether is stored per completion date.
 const DEFAULT_ETHER_FACTOR = 1;
@@ -42,6 +45,7 @@ const MIME_TYPES = {
 let state = {
   settings: { etherFactor: DEFAULT_ETHER_FACTOR },
   profiles: [],
+  shop: { items: [] },
   activeProfileId: null,
 };
 let saveChain = Promise.resolve();
@@ -173,28 +177,60 @@ function earningsOf(habit) {
     : {};
 }
 
-function etherTotal(profile) {
+// Ether earned by deleted habits lives here so removing a habit never claws
+// back ether the profile already earned.
+function retiredEarningsOf(profile) {
+  return profile.retiredEarnings &&
+    typeof profile.retiredEarnings === 'object' &&
+    !Array.isArray(profile.retiredEarnings)
+    ? profile.retiredEarnings
+    : {};
+}
+
+function normalizeRetiredEarnings(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const earnings = {};
+  for (const [date, amount] of Object.entries(source)) {
+    if (Number.isInteger(amount) && amount > 0) earnings[date] = amount;
+  }
+  return earnings;
+}
+
+function addEarnings(byDate, earnings) {
+  for (const [date, value] of Object.entries(earnings)) {
+    if (!Number.isInteger(value) || value < 1) continue;
+    byDate.set(date, (byDate.get(date) || 0) + value);
+  }
+}
+
+function earnedEther(profile) {
   let total = 0;
-  for (const habit of profile.habits || []) {
-    for (const value of Object.values(earningsOf(habit))) {
+  for (const earnings of [retiredEarningsOf(profile), ...(profile.habits || []).map(earningsOf)]) {
+    for (const value of Object.values(earnings)) {
       if (Number.isInteger(value) && value > 0) total += value;
     }
   }
   return total;
 }
 
+function spentEtherOf(profile) {
+  return Number.isInteger(profile.spentEther) && profile.spentEther > 0 ? profile.spentEther : 0;
+}
+
+function etherBalance(profile) {
+  return earnedEther(profile) - spentEtherOf(profile);
+}
+
 function etherSummary(profile) {
   const byDate = new Map();
+  addEarnings(byDate, retiredEarningsOf(profile));
   for (const habit of profile.habits || []) {
-    for (const [date, value] of Object.entries(earningsOf(habit))) {
-      if (!Number.isInteger(value) || value < 1) continue;
-      byDate.set(date, (byDate.get(date) || 0) + value);
-    }
+    addEarnings(byDate, earningsOf(habit));
   }
 
   const now = new Date();
   const days = [];
-  for (let offset = 6; offset >= 0; offset -= 1) {
+  for (let offset = 29; offset >= 0; offset -= 1) {
     const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
     const key = dayKey(date);
     days.push({ date: key, ether: byDate.get(key) || 0 });
@@ -202,9 +238,12 @@ function etherSummary(profile) {
 
   return {
     factor: state.settings.etherFactor,
-    total: [...byDate.values()].reduce((sum, value) => sum + value, 0),
+    total: etherBalance(profile),
+    earned: earnedEther(profile),
+    spent: spentEtherOf(profile),
     today: byDate.get(dayKey(now)) || 0,
-    last7: days.reduce((sum, day) => sum + day.ether, 0),
+    last7: days.slice(-7).reduce((sum, day) => sum + day.ether, 0),
+    last30: days.reduce((sum, day) => sum + day.ether, 0),
     days,
   };
 }
@@ -252,6 +291,8 @@ function makeProfile(name, theme = DEFAULT_THEME) {
     theme: parseTheme(theme),
     createdAt: new Date().toISOString(),
     habits: [],
+    retiredEarnings: {},
+    spentEther: 0,
   };
 }
 
@@ -269,7 +310,27 @@ function toPublicProfile(profile) {
     name: profile.name,
     theme: profile.theme,
     habitCount: (profile.habits || []).length,
-    ether: etherTotal(profile),
+    ether: etherBalance(profile),
+    earned: earnedEther(profile),
+    spent: spentEtherOf(profile),
+  };
+}
+
+// The habits pages show every profile at once, so habit routes accept
+// ?profile=<id>. Without it they keep operating on the active profile.
+function profileForRequest(url) {
+  const id = url.searchParams.get('profile');
+  if (!id) return activeProfile();
+  const profile = findProfile(id);
+  if (!profile) throw httpError(404, 'Profile not found.');
+  return profile;
+}
+
+function overviewProfile(profile) {
+  return {
+    ...toPublicProfile(profile),
+    summary: etherSummary(profile),
+    habits: profile.habits.map(toPublic),
   };
 }
 
@@ -308,6 +369,242 @@ function normalizeHabit(habit, factor = DEFAULT_ETHER_FACTOR) {
   return { habit: { ...habit, days, completions, earnings }, changed };
 }
 
+/* ---------- shop ---------- */
+
+function isHttpUrl(value) {
+  try {
+    const url = new URL(value);
+    return url.protocol === 'http:' || url.protocol === 'https:';
+  } catch {
+    return false;
+  }
+}
+
+function parseShopUrl(value, label) {
+  const raw = typeof value === 'string' ? value.trim() : '';
+  if (!raw) throw httpError(400, `${label} is required.`);
+  if (raw.length > MAX_URL_LENGTH) {
+    throw httpError(400, `Keep the ${label.toLowerCase()} under ${MAX_URL_LENGTH} characters.`);
+  }
+  if (!isHttpUrl(raw)) {
+    throw httpError(400, `${label} must start with http:// or https://.`);
+  }
+  return raw;
+}
+
+function parseOptionalImage(value) {
+  if (value === undefined || value === null || value === '') return '';
+  return parseShopUrl(value, 'Image URL');
+}
+
+function parseItemName(value) {
+  const name = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+  if (!name) throw httpError(400, 'Give the item a name.');
+  if (name.length > MAX_NAME_LENGTH) {
+    throw httpError(400, `Keep names under ${MAX_NAME_LENGTH} characters.`);
+  }
+  return name;
+}
+
+function parseItemCost(value) {
+  const cost = typeof value === 'number' ? value : Number(value);
+  if (!Number.isInteger(cost) || cost < 1 || cost > MAX_ITEM_COST) {
+    throw httpError(400, `Cost must be a whole number from 1 to ${MAX_ITEM_COST}.`);
+  }
+  return cost;
+}
+
+function parseConsumable(value) {
+  if (value === undefined) return false;
+  if (typeof value !== 'boolean') {
+    throw httpError(400, 'Consumable must be true or false.');
+  }
+  return value;
+}
+
+function parseExcludedProfiles(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value)) throw httpError(400, 'Contributors must be a list of profiles.');
+  const ids = new Set();
+  for (const id of value) {
+    if (typeof id !== 'string' || !findProfile(id)) {
+      throw httpError(400, 'Unknown profile in contributors.');
+    }
+    ids.add(id);
+  }
+  return [...ids];
+}
+
+function shopItemsOf() {
+  if (!state.shop || !Array.isArray(state.shop.items)) state.shop = { items: [] };
+  return state.shop.items;
+}
+
+function toPublicShopItem(item) {
+  return {
+    id: item.id,
+    name: item.name,
+    link: item.link,
+    cost: item.cost,
+    image: item.image || '',
+    createdAt: item.createdAt,
+    consumable: item.consumable === true,
+    purchasedAt: item.purchasedAt || null,
+    excludedProfiles: [...(Array.isArray(item.excludedProfiles) ? item.excludedProfiles : [])],
+  };
+}
+
+function publicShop() {
+  return { items: shopItemsOf().map(toPublicShopItem) };
+}
+
+function findShopItem(id) {
+  return shopItemsOf().find((item) => item.id === id) || null;
+}
+
+function normalizeShopItem(item, profileIds) {
+  if (!item || typeof item.id !== 'string' || !item.id) return null;
+
+  const name = typeof item.name === 'string' ? item.name.trim().replace(/\s+/g, ' ') : '';
+  const link = typeof item.link === 'string' ? item.link.trim() : '';
+  const cost = typeof item.cost === 'number' ? item.cost : Number(item.cost);
+  if (
+    !name ||
+    name.length > MAX_NAME_LENGTH ||
+    !link ||
+    link.length > MAX_URL_LENGTH ||
+    !isHttpUrl(link) ||
+    !Number.isInteger(cost) ||
+    cost < 1 ||
+    cost > MAX_ITEM_COST
+  ) {
+    return null;
+  }
+
+  let image = typeof item.image === 'string' ? item.image.trim() : '';
+  if (image && (image.length > MAX_URL_LENGTH || !isHttpUrl(image))) image = '';
+
+  const createdAt = typeof item.createdAt === 'string' ? item.createdAt : new Date().toISOString();
+  const consumable = item.consumable === true;
+  const purchasedAt =
+    typeof item.purchasedAt === 'string' &&
+    item.purchasedAt &&
+    !Number.isNaN(Date.parse(item.purchasedAt))
+      ? item.purchasedAt
+      : null;
+  const excludedProfiles = Array.isArray(item.excludedProfiles)
+    ? [...new Set(item.excludedProfiles.filter((id) => typeof id === 'string' && profileIds.has(id)))]
+    : [];
+
+  const changed =
+    name !== item.name ||
+    link !== item.link ||
+    cost !== item.cost ||
+    image !== item.image ||
+    createdAt !== item.createdAt ||
+    consumable !== item.consumable ||
+    purchasedAt !== (item.purchasedAt || null) ||
+    !Array.isArray(item.excludedProfiles) ||
+    excludedProfiles.length !== item.excludedProfiles.length ||
+    excludedProfiles.some((id, index) => id !== item.excludedProfiles[index]);
+
+  return {
+    item: {
+      id: item.id,
+      name,
+      link,
+      cost,
+      image,
+      createdAt,
+      consumable,
+      purchasedAt,
+      excludedProfiles,
+    },
+    changed,
+  };
+}
+
+function normalizeShop(value, profileIds) {
+  const source = value && Array.isArray(value.items) ? value.items : [];
+  let changed = !value || !Array.isArray(value.items);
+  const items = [];
+  for (const raw of source) {
+    const normalized = normalizeShopItem(raw, profileIds);
+    if (!normalized) {
+      changed = true;
+      continue;
+    }
+    if (normalized.changed) changed = true;
+    items.push(normalized.item);
+  }
+  if (items.length > MAX_SHOP_ITEMS) {
+    items.length = MAX_SHOP_ITEMS;
+    changed = true;
+  }
+  return { shop: { items }, changed };
+}
+
+function includedShopProfiles(item) {
+  const excluded = new Set(
+    Array.isArray(item.excludedProfiles) ? item.excludedProfiles : [],
+  );
+  return state.profiles.filter(
+    (profile) => !excluded.has(profile.id) && etherBalance(profile) > 0,
+  );
+}
+
+// Split the cost proportionally to each contributor's balance, then use the
+// largest remainders to keep every charge a whole number. This means someone
+// with more ether always pays more.
+function purchaseShopItem(item) {
+  if (!item.consumable && item.purchasedAt) {
+    throw httpError(400, 'This item has already been bought.');
+  }
+
+  const contributors = includedShopProfiles(item);
+  const total = contributors.reduce((sum, profile) => sum + etherBalance(profile), 0);
+  if (total < item.cost) {
+    throw httpError(400, `Not enough ether: ${total} of ${item.cost} available.`);
+  }
+
+  const shares = contributors.map((profile) => ({
+    profile,
+    balance: etherBalance(profile),
+  }));
+  const exact = shares.map((share) => (item.cost * share.balance) / total);
+  const amounts = exact.map((value) => Math.floor(value));
+  const remainder = item.cost - amounts.reduce((sum, value) => sum + value, 0);
+  const order = exact
+    .map((value, index) => ({
+      index,
+      fraction: value - amounts[index],
+      balance: shares[index].balance,
+      id: shares[index].profile.id,
+    }))
+    .sort(
+      (a, b) =>
+        b.fraction - a.fraction || b.balance - a.balance || a.id.localeCompare(b.id),
+    );
+
+  for (let index = 0; index < remainder; index += 1) {
+    amounts[order[index % order.length].index] += 1;
+  }
+
+  const contributions = [];
+  shares.forEach((share, index) => {
+    const amount = amounts[index];
+    if (amount < 1) return;
+    share.profile.spentEther = spentEtherOf(share.profile) + amount;
+    contributions.push({
+      profileId: share.profile.id,
+      name: share.profile.name,
+      amount,
+    });
+  });
+  if (!item.consumable) item.purchasedAt = new Date().toISOString();
+  return contributions;
+}
+
 /* ---------- persistence ---------- */
 
 async function loadState() {
@@ -332,6 +629,21 @@ async function loadState() {
           if (normalized.changed) changed = true;
           return normalized.habit;
         });
+        const retiredEarnings = normalizeRetiredEarnings(profile.retiredEarnings);
+        const retiredChanged =
+          !profile.retiredEarnings ||
+          typeof profile.retiredEarnings !== 'object' ||
+          Array.isArray(profile.retiredEarnings) ||
+          Object.keys(retiredEarnings).length !== Object.keys(profile.retiredEarnings).length ||
+          Object.entries(retiredEarnings).some(
+            ([date, amount]) => profile.retiredEarnings[date] !== amount,
+          );
+        if (retiredChanged) changed = true;
+        const spentEther =
+          Number.isInteger(profile.spentEther) && profile.spentEther > 0
+            ? profile.spentEther
+            : 0;
+        if (spentEther !== profile.spentEther) changed = true;
         const theme = THEME_IDS.includes(profile.theme) ? profile.theme : DEFAULT_THEME;
         const name =
           typeof profile.name === 'string' && profile.name.trim() ? profile.name : 'Profile';
@@ -339,7 +651,7 @@ async function loadState() {
         if (theme !== profile.theme || name !== profile.name || !Array.isArray(profile.habits)) {
           changed = true;
         }
-        profiles.push({ ...profile, name, theme, habits });
+        profiles.push({ ...profile, name, theme, habits, retiredEarnings, spentEther });
       }
 
       if (profiles.length === 0) {
@@ -352,7 +664,11 @@ async function loadState() {
         : profiles[0].id;
       if (activeProfileId !== parsed.activeProfileId) changed = true;
 
-      state = { settings: { etherFactor }, profiles, activeProfileId };
+      const profileIds = new Set(profiles.map((profile) => profile.id));
+      const shop = normalizeShop(parsed.shop, profileIds);
+      if (shop.changed) changed = true;
+
+      state = { settings: { etherFactor }, profiles, shop: shop.shop, activeProfileId };
       if (changed) await saveState();
       return;
     }
@@ -367,6 +683,7 @@ async function loadState() {
     state = {
       settings: { etherFactor: DEFAULT_ETHER_FACTOR },
       profiles: [profile],
+      shop: { items: [] },
       activeProfileId: profile.id,
     };
     await saveState();
@@ -379,6 +696,7 @@ async function loadState() {
       state = {
         settings: { etherFactor: DEFAULT_ETHER_FACTOR },
         profiles: [profile],
+        shop: state.shop && Array.isArray(state.shop.items) ? state.shop : { items: [] },
         activeProfileId: profile.id,
       };
       await saveState();
@@ -442,7 +760,7 @@ function readJson(req) {
 }
 
 // Client-side pages share one document; these clean URLs all serve index.html.
-const APP_ROUTES = new Set(['/dashboard', '/settings']);
+const APP_ROUTES = new Set(['/dashboard', '/settings', '/shop']);
 
 function resolvePublicPath(pathname) {
   let decoded;
@@ -493,9 +811,20 @@ async function serveStatic(req, res, pathname) {
 
 /* ---------- API ---------- */
 
-async function handleApi(req, res, pathname) {
+async function handleApi(req, res, pathname, url) {
   if (pathname === '/api/health') {
     return sendJson(res, 200, { ok: true, today: dayKey() });
+  }
+
+  if (pathname === '/api/overview') {
+    if (req.method !== 'GET') throw httpError(405, 'Method not allowed.');
+    return sendJson(res, 200, {
+      today: dayKey(),
+      settings: state.settings,
+      activeProfileId: state.activeProfileId,
+      profiles: state.profiles.map(overviewProfile),
+      shop: publicShop(),
+    });
   }
 
   if (pathname === '/api/settings') {
@@ -572,6 +901,9 @@ async function handleApi(req, res, pathname) {
         throw httpError(400, 'Keep at least one profile.');
       }
       state.profiles = state.profiles.filter((item) => item.id !== profile.id);
+      for (const item of shopItemsOf()) {
+        item.excludedProfiles = (item.excludedProfiles || []).filter((id) => id !== profile.id);
+      }
       if (state.activeProfileId === profile.id) {
         state.activeProfileId = state.profiles[0].id;
       }
@@ -583,9 +915,84 @@ async function handleApi(req, res, pathname) {
     throw httpError(405, 'Method not allowed.');
   }
 
-  // Every habit route below applies to the currently active profile.
-  const profile = activeProfile();
+  if (pathname === '/api/shop') {
+    if (req.method !== 'GET') throw httpError(405, 'Method not allowed.');
+    return sendJson(res, 200, {
+      ...publicShop(),
+      profiles: state.profiles.map(toPublicProfile),
+    });
+  }
 
+  if (pathname === '/api/shop/items') {
+    if (req.method !== 'POST') throw httpError(405, 'Method not allowed.');
+    const body = await readJson(req);
+    if (shopItemsOf().length >= MAX_SHOP_ITEMS) {
+      throw httpError(400, 'The shop is full. Remove an item before adding another.');
+    }
+    const item = {
+      id: crypto.randomUUID(),
+      name: parseItemName(body.name),
+      link: parseShopUrl(body.link, 'Link'),
+      cost: parseItemCost(body.cost),
+      image: parseOptionalImage(body.image),
+      createdAt: new Date().toISOString(),
+      consumable: parseConsumable(body.consumable),
+      purchasedAt: null,
+      excludedProfiles: parseExcludedProfiles(body.excludedProfiles),
+    };
+    shopItemsOf().push(item);
+    await saveState();
+    return sendJson(res, 201, toPublicShopItem(item));
+  }
+
+  const buyMatch = pathname.match(/^\/api\/shop\/items\/([\w-]+)\/buy$/);
+  if (buyMatch) {
+    if (req.method !== 'POST') throw httpError(405, 'Method not allowed.');
+    const item = findShopItem(buyMatch[1]);
+    if (!item) throw httpError(404, 'Shop item not found.');
+    const contributions = purchaseShopItem(item);
+    await saveState();
+    return sendJson(res, 200, {
+      item: toPublicShopItem(item),
+      contributions,
+      profiles: state.profiles.map(toPublicProfile),
+    });
+  }
+
+  const shopItemMatch = pathname.match(/^\/api\/shop\/items\/([\w-]+)$/);
+  if (shopItemMatch) {
+    const item = findShopItem(shopItemMatch[1]);
+    if (!item) throw httpError(404, 'Shop item not found.');
+
+    if (req.method === 'PATCH') {
+      const body = await readJson(req);
+      const updates = {};
+      if (body.name !== undefined) updates.name = parseItemName(body.name);
+      if (body.link !== undefined) updates.link = parseShopUrl(body.link, 'Link');
+      if (body.cost !== undefined) updates.cost = parseItemCost(body.cost);
+      if (body.image !== undefined) updates.image = parseOptionalImage(body.image);
+      if (body.consumable !== undefined) updates.consumable = parseConsumable(body.consumable);
+      if (body.excludedProfiles !== undefined) {
+        updates.excludedProfiles = parseExcludedProfiles(body.excludedProfiles);
+      }
+      if (Object.keys(updates).length === 0) throw httpError(400, 'Nothing to update.');
+      Object.assign(item, updates);
+      await saveState();
+      return sendJson(res, 200, toPublicShopItem(item));
+    }
+
+    if (req.method === 'DELETE') {
+      state.shop.items = shopItemsOf().filter((entry) => entry.id !== item.id);
+      await saveState();
+      res.writeHead(204, { 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+
+    throw httpError(405, 'Method not allowed.');
+  }
+
+  // Every habit route below applies to ?profile=<id>, or the active profile.
+  const profile = profileForRequest(url);
   if (pathname === '/api/habits') {
     if (req.method === 'GET') {
       return sendJson(res, 200, {
@@ -620,6 +1027,8 @@ async function handleApi(req, res, pathname) {
 
     if (req.method === 'DELETE') {
       profile.habits = [];
+      profile.retiredEarnings = {};
+      profile.spentEther = 0;
       await saveState();
       res.writeHead(204, { 'Cache-Control': 'no-store' });
       return res.end();
@@ -690,6 +1099,12 @@ async function handleApi(req, res, pathname) {
     }
 
     if (req.method === 'DELETE') {
+      const retired = { ...retiredEarningsOf(profile) };
+      for (const [date, amount] of Object.entries(earningsOf(habit))) {
+        if (!Number.isInteger(amount) || amount < 1) continue;
+        retired[date] = (retired[date] || 0) + amount;
+      }
+      profile.retiredEarnings = retired;
       profile.habits = profile.habits.filter((item) => item.id !== habit.id);
       await saveState();
       res.writeHead(204, { 'Cache-Control': 'no-store' });
@@ -705,11 +1120,12 @@ async function handleApi(req, res, pathname) {
 /* ---------- server ---------- */
 
 const server = http.createServer(async (req, res) => {
-  const { pathname } = new URL(req.url, 'http://localhost');
+  const url = new URL(req.url, 'http://localhost');
+  const { pathname } = url;
 
   try {
     if (pathname.startsWith('/api/')) {
-      await handleApi(req, res, pathname);
+      await handleApi(req, res, pathname, url);
     } else {
       await serveStatic(req, res, pathname);
     }

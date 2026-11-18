@@ -1,27 +1,45 @@
 <!doctype html>
-<html lang="en" data-theme="ember">
+<html lang="en" data-theme="ember" data-appearance="dark">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="theme-color" content="#100d0b" />
     <title>grindwell</title>
     <meta name="description" content="A tiny habit tracker: did I do it today?" />
+    <script>
+      // Apply the saved appearance before paint so light mode does not flash dark.
+      (function () {
+        var stored = null;
+        try {
+          stored = localStorage.getItem('grindwell.appearance');
+        } catch (error) {
+          /* storage may be unavailable; fall back to the system preference */
+        }
+        var appearance =
+          stored === 'light' || stored === 'dark'
+            ? stored
+            : window.matchMedia('(prefers-color-scheme: light)').matches
+              ? 'light'
+              : 'dark';
+        document.documentElement.dataset.appearance = appearance;
+      })();
+    </script>
     <link
       rel="icon"
       href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'><path fill='%23ff7a2f' d='M12.6 2.2c.4 3.3-1.4 4.9-2.9 6.6C8 10.7 6.4 12.6 6.4 15a5.6 5.6 0 0 0 11.2 0c0-2.3-1-4.2-2.5-5.7-.2 1.5-1 2.5-2 2.8.5-3.3-.1-6.9-1.5-9.9Z'/></svg>"
     />
-    <script>
-      // Apply a saved theme before first paint so there is no colour flash.
-      try {
-        var savedTheme = localStorage.getItem('grindwell.theme');
-        if (savedTheme) document.documentElement.setAttribute('data-theme', savedTheme);
-      } catch (error) {
-        /* storage unavailable; keep the default theme */
-      }
-    </script>
     <link rel="stylesheet" href="/styles.css" />
   </head>
   <body>
+    <svg class="icon-sprite" aria-hidden="true" focusable="false">
+      <symbol id="icon-ether" viewBox="0 0 24 24">
+        <path d="M12 2c.7 5.2 4.1 8.6 9.3 9.3-5.2.7-8.6 4.1-9.3 9.3-.7-5.2-4.1-8.6-9.3-9.3C7.9 10.6 11.3 7.2 12 2Z" />
+        <path
+          d="M19 3.5c.2 1.2.9 1.9 2.1 2.1-1.2.2-1.9.9-2.1 2.1-.2-1.2-.9-1.9-2.1-2.1 1.2-.2 1.9-.9 2.1-2.1Z"
+          opacity="0.65"
+        />
+      </symbol>
+    </svg>
     <main class="app">
       <header class="top">
         <div class="brand">
@@ -37,119 +55,71 @@
             <p class="date" id="date">today</p>
           </div>
         </div>
-
         <div class="top-actions">
-          <div class="theme" id="theme">
-            <button
-              class="theme-toggle"
-              id="theme-toggle"
-              type="button"
-              aria-expanded="false"
-              aria-controls="theme-panel"
-              aria-label="Choose theme color"
-            >
-              <svg viewBox="0 0 24 24" aria-hidden="true">
-                <path
-                  d="M12 2C6.5 2 2 6.5 2 12s4.5 10 10 10c.9 0 1.6-.7 1.6-1.7 0-.4-.2-.8-.4-1.1-.3-.3-.4-.7-.4-1.1 0-.9.7-1.7 1.7-1.7h2c3 0 5.5-2.5 5.5-5.5C22 6 17.5 2 12 2Z"
-                />
-                <circle cx="7.5" cy="11.5" r="1.25" />
-                <circle cx="9.5" cy="7.5" r="1.25" />
-                <circle cx="13.5" cy="7" r="1.25" />
-                <circle cx="17" cy="11.5" r="1.25" />
-              </svg>
-            </button>
-
-            <div class="theme-panel" id="theme-panel" hidden>
-              <p class="theme-title">Theme</p>
-              <div class="swatches" id="theme-swatches" role="group" aria-label="Theme color"></div>
-            </div>
-          </div>
-
           <button
-            class="reset"
-            id="reset-habits"
+            class="appearance-toggle"
+            id="appearance-toggle"
             type="button"
-            title="Delete this profile's habits and history"
-            aria-label="Reset all habits for this profile"
+            aria-pressed="false"
+            aria-label="Dark mode. Switch to light mode."
+            title="Switch to light mode"
           >
-            Reset
+            <svg class="appearance-icon appearance-sun" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="4" />
+              <path
+                d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"
+              />
+            </svg>
+            <svg class="appearance-icon appearance-moon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M20.5 14.5A8.5 8.5 0 0 1 9.5 3.5a8.5 8.5 0 1 0 11 11Z" />
+            </svg>
+            <span class="appearance-label" id="appearance-label">Dark</span>
           </button>
         </div>
       </header>
 
-      <section class="profile-bar" aria-label="Profiles">
-        <span class="profile-label">Profiles</span>
-        <div class="profile-pills" id="profile-pills" role="group" aria-label="Switch profile"></div>
-        <button
-          class="profile-add"
-          id="profile-add"
-          type="button"
-          title="Add a profile"
-          aria-label="Add a profile"
-        >
-          +
-        </button>
-      </section>
-
       <nav class="page-nav" aria-label="Pages">
         <a href="/" data-nav="habits">Habits</a>
         <a href="/dashboard" data-nav="dashboard">Dashboard</a>
+        <a href="/shop" data-nav="shop">Shop</a>
         <a href="/settings" data-nav="settings">Settings</a>
       </nav>
 
       <div class="page" id="page-habits">
-        <section class="progress-card" aria-live="polite">
-          <p class="progress-text">
-            <strong id="done-count">0</strong> of <span id="total-count">0</span> done today
-          </p>
-          <div
-            class="bar"
-            role="progressbar"
-            aria-label="Habits completed today"
-            aria-valuemin="0"
-            aria-valuemax="100"
-            aria-valuenow="0"
-            id="bar"
-          >
-            <div class="bar-fill" id="bar-fill"></div>
-          </div>
-          <p class="hint" id="hint">Nothing here yet.</p>
-        </section>
+        <header class="page-head">
+          <h2 class="page-title">Habits</h2>
+          <p class="page-subtitle">One tab per profile</p>
+        </header>
 
-        <form class="add" id="add-form" autocomplete="off">
-          <div class="add-row">
-            <label class="sr-only" for="habit-input">New habit</label>
-            <input
-              class="text-input"
-              id="habit-input"
-              name="name"
-              type="text"
-              placeholder="Read 10 pages ; 6 ; sat,sun"
-              maxlength="100"
-              required
-            />
-            <button type="submit">Add</button>
-          </div>
-        </form>
-
-        <ul class="habits" id="habit-list" aria-label="Habits"></ul>
-
-        <p class="empty" id="empty">No habits yet. Add your first one above.</p>
+        <div class="profile-tabs" id="profile-tabs" role="tablist" aria-label="Profiles"></div>
+        <div class="profile-sections" id="profile-sections"></div>
       </div>
 
       <section class="page" id="page-dashboard" hidden aria-labelledby="dashboard-title">
-        <header class="page-head">
-          <h2 class="page-title" id="dashboard-title">Dashboard</h2>
-          <p class="page-subtitle" id="dashboard-profile">Ether for this profile</p>
+        <header class="page-head dashboard-head">
+          <div class="page-head-text">
+            <h2 class="page-title" id="dashboard-title">Dashboard</h2>
+            <p class="page-subtitle">Ether balances across every profile</p>
+          </div>
+          <label class="range-control">
+            <span>Range</span>
+            <select id="dashboard-range" aria-label="Dashboard range">
+              <option value="week">Last 7 days</option>
+              <option value="month">Last 30 days</option>
+            </select>
+          </label>
         </header>
 
-        <section class="ether-card" aria-labelledby="ether-title">
+        <section class="ether-card dashboard-total" aria-labelledby="dashboard-total-title">
           <div class="ether-head">
             <div>
-              <p class="ether-title" id="ether-title">Ether</p>
+              <p class="ether-title" id="dashboard-total-title">All profiles</p>
               <p class="ether-total">
+                <svg class="ether-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                  <use href="#icon-ether"></use>
+                </svg>
                 <strong id="ether-total">0</strong>
-                <span>earned</span>
+                <span>ether balance</span>
               </p>
             </div>
             <dl class="ether-stats">
@@ -158,29 +128,130 @@
                 <dd id="ether-today">0</dd>
               </div>
               <div>
-                <dt>Last 7 days</dt>
-                <dd id="ether-week">0</dd>
+                <dt id="ether-range-label">Last 7 days</dt>
+                <dd id="ether-range">0</dd>
               </div>
             </dl>
           </div>
-
-          <div
-            class="ether-chart"
-            id="ether-chart"
-            role="img"
-            aria-label="Ether earned per day over the last seven days"
-          ></div>
         </section>
 
+        <div class="dashboard-list" id="dashboard-list"></div>
+
         <p class="page-hint">
-          The reward rate is global. Adjust it in <a href="/settings">Settings</a>.
+          Rewards are global. Adjust the rate in <a href="/settings">Settings</a>.
+        </p>
+      </section>
+
+      <section class="page" id="page-shop" hidden aria-labelledby="shop-title">
+        <header class="page-head shop-head">
+          <div class="page-head-text">
+            <h2 class="page-title" id="shop-title">Shop</h2>
+            <p class="page-subtitle">Spend ether together on shared rewards</p>
+          </div>
+          <p class="shop-balance">
+            <span class="shop-balance-value">
+              <svg class="ether-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                <use href="#icon-ether"></use>
+              </svg>
+              <strong id="shop-balance">0</strong>
+            </span>
+            <span>ether available</span>
+          </p>
+        </header>
+
+        <div class="shop-add">
+          <button
+            class="shop-add-toggle"
+            id="shop-add-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-controls="shop-form"
+          >
+            <span class="shop-add-plus" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path d="M12 5v14M5 12h14" />
+              </svg>
+            </span>
+            <span>Add an item</span>
+          </button>
+
+          <form class="settings-card shop-form" id="shop-form" hidden>
+            <div class="shop-form-head">
+              <div>
+                <h3 class="settings-title">Add an item</h3>
+                <p class="settings-note">
+                  Anyone can add a reward. Items are shared with every profile.
+                </p>
+              </div>
+              <button
+                class="shop-form-close"
+                id="shop-form-close"
+                type="button"
+                aria-label="Close add item form"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6L6 18" />
+                </svg>
+              </button>
+            </div>
+            <div class="shop-form-grid">
+              <label for="shop-name">Name</label>
+              <input id="shop-name" name="name" maxlength="60" placeholder="Coffee" required />
+
+              <label for="shop-link">Link</label>
+              <input
+                id="shop-link"
+                name="link"
+                type="url"
+                maxlength="500"
+                placeholder="https://example.com/item"
+                required
+              />
+
+              <label for="shop-cost">Cost</label>
+              <input
+                id="shop-cost"
+                name="cost"
+                type="number"
+                min="1"
+                max="1000000"
+                step="1"
+                inputmode="numeric"
+                placeholder="50"
+                required
+              />
+
+              <label for="shop-image">Image</label>
+              <input
+                id="shop-image"
+                name="image"
+                type="url"
+                maxlength="500"
+                placeholder="https://example.com/image.jpg (optional)"
+              />
+
+              <label class="shop-check" for="shop-consumable">
+                <input id="shop-consumable" name="consumable" type="checkbox" />
+                <span>
+                  <strong>Consumable</strong>
+                  <small>Can be bought more than once. Leave off for a one-time reward.</small>
+                </span>
+              </label>
+            </div>
+            <button type="submit">Add item</button>
+          </form>
+        </div>
+
+        <div class="shop-list" id="shop-list"></div>
+        <p class="empty shop-empty" id="shop-empty" hidden>
+          The shop is empty. Add the first reward above.
         </p>
       </section>
 
       <section class="page" id="page-settings" hidden aria-labelledby="settings-title">
         <header class="page-head">
           <h2 class="page-title" id="settings-title">Settings</h2>
-          <p class="page-subtitle">Global reward rate</p>
+          <p class="page-subtitle">Shared reward rate and profiles</p>
         </header>
 
         <form class="settings-card factor-form" id="ether-form">
@@ -203,6 +274,26 @@
             Changes apply to future completions; earned ether is locked in.
           </p>
         </form>
+
+        <section class="settings-card profiles-settings" aria-labelledby="profiles-title">
+          <div class="settings-head">
+            <div>
+              <h3 class="settings-title" id="profiles-title">Profiles</h3>
+              <p class="settings-note">Each profile keeps its own habits, ether, and colour.</p>
+            </div>
+            <button
+              class="profile-add"
+              id="profile-add"
+              type="button"
+              title="Add a profile"
+              aria-label="Add a profile"
+            >
+              + Add
+            </button>
+          </div>
+
+          <ul class="profile-list" id="profile-list"></ul>
+        </section>
       </section>
     </main>
 
