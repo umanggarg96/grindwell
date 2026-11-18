@@ -975,8 +975,83 @@ try {
   r = await call('/api/settings', { method: 'DELETE' });
   check('unsupported settings method is 405', r.status === 405);
 
+  console.log('\nsounds');
+  r = await call('/api/settings');
+  check(
+    'settings expose sound defaults',
+    r.status === 200 &&
+      r.body.sounds &&
+      r.body.sounds.habit === 'chime' &&
+      r.body.sounds.purchase === 'pop' &&
+      Array.isArray(r.body.sounds.custom) &&
+      r.body.sounds.custom.length === 0,
+    JSON.stringify(r.body.sounds),
+  );
+
+  r = await call('/api/settings', { method: 'PATCH', ...json({ sounds: { habit: 'bell' } }) });
+  check(
+    'habit sound can be changed',
+    r.status === 200 && r.body.sounds.habit === 'bell' && r.body.sounds.purchase === 'pop',
+    JSON.stringify(r.body.sounds),
+  );
+
+  r = await call('/api/settings', { method: 'PATCH', ...json({ sounds: { habit: 'nope' } }) });
+  check('unknown sound is rejected', r.status === 400, String(r.status));
+
+  r = await call('/api/settings/sounds', {
+    method: 'POST',
+    ...json({ name: 'Doorbell', url: 'https://example.com/doorbell.mp3' }),
+  });
+  const customSoundId = r.body.sound && r.body.sound.id;
+  check(
+    'custom sound can be added',
+    r.status === 201 &&
+      typeof customSoundId === 'string' &&
+      r.body.sounds.custom.length === 1 &&
+      r.body.sounds.custom[0].name === 'Doorbell',
+    JSON.stringify(r.body),
+  );
+
+  r = await call('/api/settings', {
+    method: 'PATCH',
+    ...json({ sounds: { purchase: customSoundId } }),
+  });
+  check(
+    'custom sound can be selected',
+    r.status === 200 && r.body.sounds.purchase === customSoundId,
+    JSON.stringify(r.body.sounds),
+  );
+
+  r = await call('/api/settings/sounds', {
+    method: 'POST',
+    ...json({ name: 'Bad sound', url: 'ftp://example.com/bad.mp3' }),
+  });
+  check('custom sound URL must be http(s)', r.status === 400, String(r.status));
+
+  r = await call(`/api/settings/sounds/${customSoundId}`, { method: 'DELETE' });
+  check(
+    'removing a selected custom sound falls back to a built-in',
+    r.status === 200 &&
+      r.body.sounds.custom.length === 0 &&
+      r.body.sounds.purchase === 'pop',
+    JSON.stringify(r.body.sounds),
+  );
+
+  r = await call('/api/settings', {
+    method: 'PATCH',
+    ...json({ sounds: { habit: 'chime', purchase: 'pop' } }),
+  });
+  check('sounds restored to defaults', r.status === 200 && r.body.sounds.habit === 'chime');
+
   const etherDisk = JSON.parse(await fs.readFile(dataFile, 'utf8'));
   check('ether factor persisted to disk', etherDisk.settings.etherFactor === 1);
+  check(
+    'sound settings persisted to disk',
+    etherDisk.settings.sounds &&
+      etherDisk.settings.sounds.habit === 'chime' &&
+      etherDisk.settings.sounds.purchase === 'pop',
+    JSON.stringify(etherDisk.settings.sounds),
+  );
   const mineOnDisk = etherDisk.profiles.find((profile) => profile.id === mineId);
   check(
     'earnings persisted per completion date',
@@ -1102,6 +1177,29 @@ try {
       js.includes('function playChime') &&
       toggleSource.includes('ensureAudioContext()') &&
       toggleSource.includes('if (next) playHabitSound()'),
+  );
+
+  console.log('\nsound wiring');
+  check(
+    'settings page has sound controls',
+    ['habit-sound', 'purchase-sound', 'sound-form', 'sound-name', 'sound-url', 'sound-list'].every(
+      (id) => html.includes(`id="${id}"`),
+    ) &&
+      html.includes('data-preview="habit"') &&
+      html.includes('data-preview="purchase"'),
+  );
+  check(
+    'app renders and saves configurable sounds',
+    ['SOUND_PRESETS', 'playSound', 'playAudioUrl', 'renderSounds', 'saveSoundChoice', 'addSound', 'deleteSound'].every(
+      (name) => js.includes(name),
+    ) &&
+      js.includes("api('/api/settings/sounds'") &&
+      js.includes("settings.sounds.purchase") &&
+      js.includes("settings.sounds.habit"),
+  );
+  check(
+    'sound styles present',
+    css.includes('.sound-row') && css.includes('.sound-form') && css.includes('.sound-list'),
   );
 
   console.log('\nshop');

@@ -98,12 +98,25 @@ Ether amounts are marked with a small sparkle icon so the currency is easy to sp
   **Range** dropdown on the page to switch between the last 7 days and the last 30 days. Each card is
   tinted with that profile's selected palette, so people can tell their progress apart at a glance.
 - Checking a habit plays a short chime. It is synthesised in the browser, so it needs no audio file.
+  You can change it, or the Shop purchase sound, on the **Settings** page; see **Sounds** below.
 - There is no streak bonus; difficulty is the only input.
 
 The nav bar, header, page titles, and shared page controls deliberately use a reserved slate colour
 that is **not** one of the selectable palettes. That keeps shared chrome distinct from every
 profile's colour while the habit content, dashboard cards, and shop contributor checkboxes still use
 the profile themes.
+
+## Sounds
+
+The **Settings** page has a **Sounds** card with two pickers: one for completing a habit and one for
+buying a Shop reward. The built-in sounds are **Chime**, **Sparkle**, **Pop**, **Bell**, and **Off**;
+they are synthesised in the browser, so the app still ships no audio files. Each picker has a
+**Preview** button, and changing a picker saves immediately.
+
+To add your own sound, use the **Add a sound** form with a name and a direct `http(s)` link to an
+audio file. Custom sounds appear in both pickers and in the list below, where each one has a preview
+and remove button. Removing a sound that is currently selected falls back to the built-in default.
+Custom sound URLs are stored in `data.json`, so the browser fetches them directly.
 
 ## Shop
 
@@ -160,7 +173,18 @@ Everything lives in `data.json` (gitignored):
 ```json
 {
   "settings": {
-    "etherFactor": 1
+    "etherFactor": 1,
+    "sounds": {
+      "habit": "chime",
+      "purchase": "pop",
+      "custom": [
+        {
+          "id": "c1a2...",
+          "name": "Doorbell",
+          "url": "https://example.com/doorbell.mp3"
+        }
+      ]
+    }
   },
   "profiles": [
     {
@@ -208,7 +232,9 @@ to the profile's `retiredEarnings` so the earned total is never reduced. `spentE
 total spent in the Shop; a profile's balance is its earned ether minus `spentEther`. Back the file up
 by copying it; move machines by taking it with you. Older single-profile files (a top-level `habits`
 array) are migrated into a profile named **Mine** on startup, and completions from before the reward
-system are backfilled using the current factor and difficulty.
+system are backfilled using the current factor and difficulty. `settings.sounds` stores the selected
+habit and purchase sound ids plus any custom sounds; built-in ids are `chime`, `sparkle`, `pop`,
+`bell`, and `off`.
 
 ## Homelab notes
 
@@ -233,8 +259,10 @@ docker run -d --name grindwell -p 3000:3000 -v grindwell-data:/data grindwell
 | `PATCH`  | `/api/profiles/:id`        | any of `name`, `theme`                        | Updated profile           |
 | `POST`   | `/api/profiles/:id/activate` | —                                           | Updated active profile    |
 | `DELETE` | `/api/profiles/:id`        | —                                             | `204`                     |
-| `GET`    | `/api/settings`            | —                                             | `{ etherFactor }`         |
-| `PATCH`  | `/api/settings`            | `{ "etherFactor": 0.5 }`                      | Updated settings          |
+| `GET`    | `/api/settings`            | —                                             | `{ etherFactor, sounds }` |
+| `PATCH`  | `/api/settings`            | any of `etherFactor`, `sounds: { habit, purchase }` | Updated settings     |
+| `POST`   | `/api/settings/sounds`     | `{ "name": "...", "url": "https://..." }`     | `{ sound, sounds }`       |
+| `DELETE` | `/api/settings/sounds/:id` | —                                             | Updated settings          |
 | `GET`    | `/api/shop`                | —                                             | `{ items[], profiles[] }` |
 | `POST`   | `/api/shop/items`          | `{ "name": "...", "link": "...", "cost": 20, "image": "...", "consumable": false }` | Created item |
 | `PATCH`  | `/api/shop/items/:id`      | any of `name`, `link`, `cost`, `image`, `consumable`, `excludedProfiles` | Updated item |
@@ -263,7 +291,10 @@ plus the shared `shop`:
 ```json
 {
   "today": "2026-11-18",
-  "settings": { "etherFactor": 1 },
+  "settings": {
+    "etherFactor": 1,
+    "sounds": { "habit": "chime", "purchase": "pop", "custom": [] }
+  },
   "activeProfileId": "9f12...",
   "profiles": [
     {

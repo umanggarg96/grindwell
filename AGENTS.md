@@ -73,7 +73,7 @@ These conventions are intentional. Do not undo them without asking.
   - `/` — **Habits**: a tab per profile with that profile's checklist.
   - `/dashboard` — **Dashboard**: combined ether balance plus one themed card per profile.
   - `/shop` — **Shop**: shared reward items, contributor checkboxes, and purchases.
-  - `/settings` — **Settings**: global ether factor and profile management.
+  - `/settings` — **Settings**: global ether factor, sounds, and profile management.
 - The server stores `activeProfileId` so a reload opens the last selected Habits tab. Habit routes
   accept `?profile=<id>`; selecting a tab also activates that profile server-side.
 - The header toggle switches the whole app between dark and light. The choice lives in the browser,
@@ -165,7 +165,18 @@ profile accents intact.
 ```json
 {
   "settings": {
-    "etherFactor": 1
+    "etherFactor": 1,
+    "sounds": {
+      "habit": "chime",
+      "purchase": "pop",
+      "custom": [
+        {
+          "id": "c1a2...",
+          "name": "Doorbell",
+          "url": "https://example.com/doorbell.mp3"
+        }
+      ]
+    }
   },
   "profiles": [
     {
@@ -240,8 +251,10 @@ Key rules:
 | `PATCH` | `/api/profiles/:id` | any of `name`, `theme` |
 | `POST` | `/api/profiles/:id/activate` | legacy/API compatibility |
 | `DELETE` | `/api/profiles/:id` | `204`; last profile is rejected |
-| `GET` | `/api/settings` | `{ etherFactor }` |
-| `PATCH` | `/api/settings` | `{ etherFactor }`, `0.1`–`10` |
+| `GET` | `/api/settings` | `{ etherFactor, sounds }` |
+| `PATCH` | `/api/settings` | any of `etherFactor` (`0.1`–`10`), `sounds: { habit?, purchase? }` |
+| `POST` | `/api/settings/sounds` | `{ name, url }`; adds a custom sound |
+| `DELETE` | `/api/settings/sounds/:id` | `200`; falls back if the sound was selected |
 | `GET` | `/api/shop` | `{ items[], profiles[] }` |
 | `POST` | `/api/shop/items` | `{ name, link, cost, image?, excludedProfiles? }` |
 | `PATCH` | `/api/shop/items/:id` | any of `name`, `link`, `cost`, `image`, `excludedProfiles` |
@@ -266,6 +279,9 @@ Details:
   earnedToday }`.
 - A public shop item is
   `{ id, name, link, cost, image, createdAt, consumable, purchasedAt, excludedProfiles }`.
+- `settings.sounds` is `{ habit, purchase, custom[] }`. Built-in ids are `chime`, `sparkle`, `pop`,
+  `bell`, and `off`; custom sounds are `{ id, name, url }` with an `http(s)` URL. Custom sounds are
+  limited to `MAX_CUSTOM_SOUNDS`. Deleting a selected custom sound resets that slot to its default.
 - `POST /api/habits` defaults `difficulty` to `5` and `days` to all seven.
 - `difficulty` must be an integer 1–10. `days` must be a non-empty array of unique integers 0–6.
 - Toggling a rest day on returns `400`; toggling it off is allowed.
@@ -296,7 +312,11 @@ Details:
   - `renderDashboard()` — combined balances plus one `.dashboard-card` per profile.
   - `renderShop()` — shop balance, the Consumables and Rewards sections, item cards and tiles,
     progress bars, and contributor checkboxes.
-  - `renderSettings()` — ether factor field.
+  - `renderSettings()` — ether factor field and sound pickers.
+- `renderSounds()` fills the habit and purchase sound pickers from `SOUND_PRESETS` plus
+  `settings.sounds.custom`, renders each custom sound with preview/remove buttons, and hides the
+  list when there are none. `saveSoundChoice()`, `addSound()`, and `deleteSound()` persist changes
+  through `/api/settings` and `/api/settings/sounds`.
 - `renderProfileTabs(current)` builds `role="tab"` buttons, one per profile, each carrying that
   profile's `data-theme`. Arrow keys, Home, and End move between tabs.
 - `selectProfileTab(id)` updates `activeTabId`, clears any inline edit, re-renders, and activates
@@ -334,9 +354,10 @@ Details:
   `shopContributorShares(item)` splits the cost the same way the server does, so the colour-coded
   progress segments and legend match the purchase charges. `buyShopItem` posts to
   `/api/shop/items/:id/buy` and reloads; it buys immediately with no confirmation dialog and calls
-  `playPurchaseSound()` on success. `playPurchaseSound()` and `playHabitSound()` share `playChime()`,
-  which synthesises short notes with the Web Audio API, so no audio asset is needed. `addShopItem`
-  and `deleteShopItem` manage items.
+  `playPurchaseSound()` on success. `playPurchaseSound()` and `playHabitSound()` resolve the
+  configured id through `playSound()`: built-in presets use `playChime()` (Web Audio synthesis) and
+  custom sounds use `playAudioUrl()` with a cached `HTMLAudioElement`. `addShopItem` and
+  `deleteShopItem` manage items.
 - The shop add form starts collapsed behind `#shop-add-toggle`. `setShopFormOpen(open)` hides the
   toggle, reveals `#shop-form`, keeps `aria-expanded` in sync, and focuses the name field or the
   toggle. `Esc`, the close button, and a successful add collapse it again.
@@ -430,6 +451,17 @@ ether = max(1, round(difficulty × factor))
   values count earned ether.
 - The dashboard card is tinted with that profile's theme and follows the page's weekly/monthly range
   selector (last 7 or last 30 days).
+
+### Sounds
+
+- Sounds are global settings, not per profile.
+- Built-in ids are `chime`, `sparkle`, `pop`, `bell`, and `off`. They are synthesised in the browser,
+  so there are no audio assets.
+- `settings.sounds.custom` holds `{ id, name, url }` entries. URLs must be `http(s)`, names are
+  capped at `MAX_NAME_LENGTH`, and the list is capped at `MAX_CUSTOM_SOUNDS`.
+- Habit completion plays `settings.sounds.habit`; Shop purchases play `settings.sounds.purchase`.
+- Deleting a custom sound that is selected resets that slot to its built-in default.
+- Custom audio is fetched by the browser, so an unreachable URL simply fails silently.
 
 ### Shop
 

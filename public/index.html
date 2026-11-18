@@ -275,6 +275,57 @@
           </p>
         </form>
 
+        <section class="settings-card sounds-card" aria-labelledby="sounds-title">
+          <div class="settings-head">
+            <div>
+              <h3 class="settings-title" id="sounds-title">Sounds</h3>
+              <p class="settings-note">
+                Pick the sound for completing a habit and for buying a shop reward.
+              </p>
+            </div>
+          </div>
+
+          <div class="sound-row">
+            <label for="habit-sound">Habit complete</label>
+            <div class="sound-picker">
+              <select id="habit-sound"></select>
+              <button type="button" class="sound-preview" data-preview="habit">Preview</button>
+            </div>
+          </div>
+
+          <div class="sound-row">
+            <label for="purchase-sound">Shop purchase</label>
+            <div class="sound-picker">
+              <select id="purchase-sound"></select>
+              <button type="button" class="sound-preview" data-preview="purchase">Preview</button>
+            </div>
+          </div>
+
+          <form class="sound-form" id="sound-form">
+            <h4 class="sound-form-title">Add a sound</h4>
+            <p class="settings-note">
+              Use a direct http(s) link to an audio file. It joins the list above.
+            </p>
+            <div class="sound-form-grid">
+              <label for="sound-name">Name</label>
+              <input id="sound-name" name="name" maxlength="60" placeholder="Doorbell" required />
+
+              <label for="sound-url">Audio URL</label>
+              <input
+                id="sound-url"
+                name="url"
+                type="url"
+                maxlength="500"
+                placeholder="https://example.com/sound.mp3"
+                required
+              />
+            </div>
+            <button type="submit">Add sound</button>
+          </form>
+
+          <ul class="sound-list" id="sound-list" hidden></ul>
+        </section>
+
         <section class="settings-card profiles-settings" aria-labelledby="profiles-title">
           <div class="settings-head">
             <div>

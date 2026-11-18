@@ -1167,6 +1167,168 @@ body[data-page="shop"] .page-title {
   font-weight: 600;
 }
 
+/* sounds */
+
+.sound-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.sound-row > label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sound-picker {
+  display: flex;
+  gap: 8px;
+  flex: 1;
+  justify-content: flex-end;
+  min-width: 200px;
+}
+
+.sound-picker select {
+  flex: 1;
+  max-width: 220px;
+  height: 38px;
+  padding: 0 10px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+
+.sound-picker select:focus-visible {
+  outline: 2px solid rgba(var(--chrome-bright-rgb), 0.9);
+  outline-offset: 2px;
+}
+
+.sound-preview,
+.sound-form button {
+  padding: 0 16px;
+  border: 1px solid rgba(var(--chrome-rgb), 0.38);
+  border-radius: 10px;
+  background: rgba(var(--chrome-rgb), 0.14);
+  color: var(--chrome-bright);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.sound-preview:hover,
+.sound-form button:hover {
+  background: rgba(var(--chrome-rgb), 0.22);
+  border-color: rgba(var(--chrome-rgb), 0.55);
+}
+
+.sound-preview:focus-visible,
+.sound-form button:focus-visible {
+  outline: 2px solid rgba(var(--chrome-bright-rgb), 0.9);
+  outline-offset: 2px;
+}
+
+.sound-form {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.sound-form-title {
+  margin: 0;
+  font-size: 0.86rem;
+  font-weight: 700;
+}
+
+.sound-form .settings-note {
+  margin: 0;
+}
+
+.sound-form-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.sound-form-grid label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.sound-form-grid input {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+}
+
+.sound-form-grid input:focus-visible {
+  outline: 2px solid rgba(var(--chrome-bright-rgb), 0.9);
+  outline-offset: 2px;
+}
+
+.sound-form button {
+  justify-self: start;
+  min-height: 38px;
+}
+
+.sound-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.sound-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-raised);
+}
+
+.sound-item-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.sound-item-name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.sound-item-url {
+  color: var(--muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .settings-head {
   display: flex;
   align-items: flex-start;
@@ -2561,6 +2723,23 @@ body[data-page="shop"] .page-title {
 
   .shop-tile .shop-progress-label {
     font-size: 0.56rem;
+  }
+
+  .sound-form-grid {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .sound-form-grid label {
+    margin-top: 4px;
+  }
+
+  .sound-picker {
+    justify-content: stretch;
+  }
+
+  .sound-picker select {
+    max-width: none;
   }
 }
 

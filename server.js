@@ -30,6 +30,10 @@ const MIN_ETHER_FACTOR = 0.1;
 const MAX_ETHER_FACTOR = 10;
 // JavaScript weekday numbers: 0 = Sunday ... 6 = Saturday.
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
+// Built-in sounds are synthesised in the browser; custom ones point at audio URLs.
+const SOUND_IDS = ['chime', 'sparkle', 'pop', 'bell', 'off'];
+const DEFAULT_SOUNDS = { habit: 'chime', purchase: 'pop', custom: [] };
+const MAX_CUSTOM_SOUNDS = 20;
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -43,7 +47,7 @@ const MIME_TYPES = {
 };
 
 let state = {
-  settings: { etherFactor: DEFAULT_ETHER_FACTOR },
+  settings: defaultSettings(),
   profiles: [],
   shop: { items: [] },
   activeProfileId: null,
@@ -169,6 +173,83 @@ function parseEtherFactor(value) {
     );
   }
   return Math.round(factor * 100) / 100;
+}
+
+function defaultSounds() {
+  return { habit: DEFAULT_SOUNDS.habit, purchase: DEFAULT_SOUNDS.purchase, custom: [] };
+}
+
+function defaultSettings() {
+  return { etherFactor: DEFAULT_ETHER_FACTOR, sounds: defaultSounds() };
+}
+
+function normalizeCustomSounds(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const sounds = [];
+
+  for (const sound of value) {
+    if (!sound || typeof sound.id !== 'string' || !sound.id || seen.has(sound.id)) continue;
+    const name = typeof sound.name === 'string' ? sound.name.trim().replace(/\s+/g, ' ') : '';
+    const url = typeof sound.url === 'string' ? sound.url.trim() : '';
+    if (!name || name.length > MAX_NAME_LENGTH) continue;
+    if (!url || url.length > MAX_URL_LENGTH || !isHttpUrl(url)) continue;
+    seen.add(sound.id);
+    sounds.push({ id: sound.id, name, url });
+    if (sounds.length >= MAX_CUSTOM_SOUNDS) break;
+  }
+
+  return sounds;
+}
+
+function soundChoiceExists(id, custom) {
+  return SOUND_IDS.includes(id) || custom.some((sound) => sound.id === id);
+}
+
+function normalizeSounds(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const custom = normalizeCustomSounds(source.custom);
+  return {
+    habit: soundChoiceExists(source.habit, custom) ? source.habit : DEFAULT_SOUNDS.habit,
+    purchase: soundChoiceExists(source.purchase, custom)
+      ? source.purchase
+      : DEFAULT_SOUNDS.purchase,
+    custom,
+  };
+}
+
+function soundsOf() {
+  state.settings.sounds = normalizeSounds(state.settings.sounds);
+  return state.settings.sounds;
+}
+
+function parseSoundChoice(value) {
+  if (typeof value !== 'string' || !soundChoiceExists(value, soundsOf().custom)) {
+    throw httpError(400, 'Choose a known sound.');
+  }
+  return value;
+}
+
+function parseSoundsUpdate(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw httpError(400, 'Sounds must be an object.');
+  }
+
+  const current = soundsOf();
+  return {
+    habit: value.habit === undefined ? current.habit : parseSoundChoice(value.habit),
+    purchase: value.purchase === undefined ? current.purchase : parseSoundChoice(value.purchase),
+    custom: current.custom,
+  };
+}
+
+function parseSoundName(value) {
+  const name = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+  if (!name) throw httpError(400, 'Give the sound a name.');
+  if (name.length > MAX_NAME_LENGTH) {
+    throw httpError(400, `Keep names under ${MAX_NAME_LENGTH} characters.`);
+  }
+  return name;
 }
 
 function earningsOf(habit) {
@@ -617,6 +698,10 @@ async function loadState() {
       const profiles = [];
       const etherFactor = etherFactorOf(parsed.settings && parsed.settings.etherFactor);
       if (etherFactor !== (parsed.settings && parsed.settings.etherFactor)) changed = true;
+      const sounds = normalizeSounds(parsed.settings && parsed.settings.sounds);
+      if (JSON.stringify(sounds) !== JSON.stringify(parsed.settings && parsed.settings.sounds)) {
+        changed = true;
+      }
 
       for (const profile of parsed.profiles) {
         if (!profile || typeof profile.id !== 'string') {
@@ -668,7 +753,7 @@ async function loadState() {
       const shop = normalizeShop(parsed.shop, profileIds);
       if (shop.changed) changed = true;
 
-      state = { settings: { etherFactor }, profiles, shop: shop.shop, activeProfileId };
+      state = { settings: { etherFactor, sounds }, profiles, shop: shop.shop, activeProfileId };
       if (changed) await saveState();
       return;
     }
@@ -681,7 +766,7 @@ async function loadState() {
       );
     }
     state = {
-      settings: { etherFactor: DEFAULT_ETHER_FACTOR },
+      settings: defaultSettings(),
       profiles: [profile],
       shop: { items: [] },
       activeProfileId: profile.id,
@@ -694,7 +779,7 @@ async function loadState() {
     if (state.profiles.length === 0) {
       const profile = makeProfile('Mine');
       state = {
-        settings: { etherFactor: DEFAULT_ETHER_FACTOR },
+        settings: defaultSettings(),
         profiles: [profile],
         shop: state.shop && Array.isArray(state.shop.items) ? state.shop : { items: [] },
         activeProfileId: profile.id,
@@ -838,6 +923,9 @@ async function handleApi(req, res, pathname, url) {
       if (body.etherFactor !== undefined) {
         updates.etherFactor = parseEtherFactor(body.etherFactor);
       }
+      if (body.sounds !== undefined) {
+        updates.sounds = parseSoundsUpdate(body.sounds);
+      }
       if (Object.keys(updates).length === 0) throw httpError(400, 'Nothing to update.');
       Object.assign(state.settings, updates);
       await saveState();
@@ -845,6 +933,39 @@ async function handleApi(req, res, pathname, url) {
     }
 
     throw httpError(405, 'Method not allowed.');
+  }
+
+  if (pathname === '/api/settings/sounds') {
+    if (req.method !== 'POST') throw httpError(405, 'Method not allowed.');
+    const body = await readJson(req);
+    const sounds = soundsOf();
+    if (sounds.custom.length >= MAX_CUSTOM_SOUNDS) {
+      throw httpError(400, 'You already have enough custom sounds.');
+    }
+    const sound = {
+      id: crypto.randomUUID(),
+      name: parseSoundName(body.name),
+      url: parseShopUrl(body.url, 'Sound URL'),
+    };
+    sounds.custom.push(sound);
+    await saveState();
+    return sendJson(res, 201, { sound, sounds });
+  }
+
+  const soundMatch = pathname.match(/^\/api\/settings\/sounds\/([\w-]+)$/);
+  if (soundMatch) {
+    if (req.method !== 'DELETE') throw httpError(405, 'Method not allowed.');
+    const sounds = soundsOf();
+    const index = sounds.custom.findIndex((sound) => sound.id === soundMatch[1]);
+    if (index === -1) throw httpError(404, 'Sound not found.');
+    sounds.custom.splice(index, 1);
+    // A removed sound must not stay selected.
+    if (!soundChoiceExists(sounds.habit, sounds.custom)) sounds.habit = DEFAULT_SOUNDS.habit;
+    if (!soundChoiceExists(sounds.purchase, sounds.custom)) {
+      sounds.purchase = DEFAULT_SOUNDS.purchase;
+    }
+    await saveState();
+    return sendJson(res, 200, state.settings);
   }
 
   if (pathname === '/api/profiles') {

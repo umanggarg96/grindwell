@@ -10,6 +10,13 @@ const els = {
   profileAdd: document.getElementById('profile-add'),
   etherForm: document.getElementById('ether-form'),
   etherFactor: document.getElementById('ether-factor'),
+  habitSound: document.getElementById('habit-sound'),
+  purchaseSound: document.getElementById('purchase-sound'),
+  soundPreviews: document.querySelectorAll('[data-preview]'),
+  soundForm: document.getElementById('sound-form'),
+  soundName: document.getElementById('sound-name'),
+  soundUrl: document.getElementById('sound-url'),
+  soundList: document.getElementById('sound-list'),
   etherTotal: document.getElementById('ether-total'),
   etherToday: document.getElementById('ether-today'),
   etherRange: document.getElementById('ether-range'),
@@ -51,6 +58,14 @@ const THEMES = [
   { id: 'violet', name: 'Violet' },
   { id: 'rose', name: 'Rose' },
 ];
+// Built-in sounds are synthesised; custom sounds come from settings.sounds.custom.
+const SOUND_PRESETS = [
+  { id: 'chime', label: 'Chime', notes: [523.25, 659.25, 783.99] },
+  { id: 'sparkle', label: 'Sparkle', notes: [880, 1108.73, 1318.51, 1760] },
+  { id: 'pop', label: 'Pop', notes: [660, 880] },
+  { id: 'bell', label: 'Bell', notes: [783.99, 1046.5, 1318.51] },
+  { id: 'off', label: 'Off', notes: null },
+];
 const PAGE_PATH = window.location.pathname.replace(/\/+$/, '') || '/';
 const PAGE =
   PAGE_PATH === '/dashboard'
@@ -68,7 +83,7 @@ const STAR_PATH =
   'M12 2.2l2.94 6.02 6.64.96-4.79 4.67 1.13 6.61L12 17.36l-5.92 3.1 1.13-6.61L2.42 9.18l6.64-.96L12 2.2z';
 
 let profiles = [];
-let settings = { etherFactor: 1 };
+let settings = { etherFactor: 1, sounds: { habit: 'chime', purchase: 'pop', custom: [] } };
 let shop = { items: [] };
 let today = '';
 let activeTabId = null;
@@ -76,6 +91,7 @@ let dashboardRange = storedDashboardRange();
 let appearance = document.documentElement.dataset.appearance === 'light' ? 'light' : 'dark';
 let toastTimer = null;
 let audioContext = null;
+const customAudio = new Map();
 let editingKey = null;
 let editDraft = null;
 
@@ -156,12 +172,46 @@ function playChime(frequencies) {
   }
 }
 
+function customSounds() {
+  const list = settings.sounds && settings.sounds.custom;
+  return Array.isArray(list) ? list : [];
+}
+
+function playAudioUrl(url) {
+  try {
+    let audio = customAudio.get(url);
+    if (!audio) {
+      audio = new window.Audio(url);
+      audio.preload = 'auto';
+      customAudio.set(url, audio);
+    }
+    audio.currentTime = 0;
+    const playback = audio.play();
+    if (playback && typeof playback.catch === 'function') playback.catch(() => {});
+  } catch {
+    /* Sound is a bonus; never block the action. */
+  }
+}
+
+function playSound(id) {
+  if (!id || id === 'off') return;
+
+  const custom = customSounds().find((sound) => sound.id === id);
+  if (custom) {
+    playAudioUrl(custom.url);
+    return;
+  }
+
+  const preset = SOUND_PRESETS.find((sound) => sound.id === id);
+  if (preset && preset.notes) playChime(preset.notes);
+}
+
 function playPurchaseSound() {
-  playChime([660, 880]);
+  playSound((settings.sounds && settings.sounds.purchase) || 'pop');
 }
 
 function playHabitSound() {
-  playChime([523.25, 659.25, 783.99]);
+  playSound((settings.sounds && settings.sounds.habit) || 'chime');
 }
 
 function plural(count, word) {
@@ -1506,9 +1556,143 @@ async function buyShopItem(item) {
 
 /* ---------- settings ---------- */
 
+function soundOptions() {
+  return [
+    ...SOUND_PRESETS.map((sound) => ({ id: sound.id, name: sound.label })),
+    ...customSounds().map((sound) => ({ id: sound.id, name: sound.name })),
+  ];
+}
+
+function fillSoundSelect(select, selected) {
+  const options = soundOptions();
+  select.replaceChildren(
+    ...options.map((sound) => {
+      const option = document.createElement('option');
+      option.value = sound.id;
+      option.textContent = sound.name;
+      option.selected = sound.id === selected;
+      return option;
+    }),
+  );
+
+  if (!options.some((sound) => sound.id === selected)) {
+    const fallback = document.createElement('option');
+    fallback.value = selected;
+    fallback.textContent = selected;
+    fallback.selected = true;
+    select.append(fallback);
+  }
+}
+
+function soundName(id) {
+  return soundOptions().find((sound) => sound.id === id)?.name || id;
+}
+
+function soundRow(sound) {
+  const item = document.createElement('li');
+  item.className = 'sound-item';
+
+  const main = document.createElement('div');
+  main.className = 'sound-item-main';
+
+  const name = document.createElement('span');
+  name.className = 'sound-item-name';
+  name.textContent = sound.name;
+
+  const url = document.createElement('span');
+  url.className = 'sound-item-url';
+  url.textContent = sound.url;
+
+  main.append(name, url);
+
+  const play = document.createElement('button');
+  play.type = 'button';
+  play.className = 'profile-icon';
+  play.textContent = '▶';
+  play.title = `Preview ${sound.name}`;
+  play.setAttribute('aria-label', `Preview ${sound.name}`);
+  play.addEventListener('click', () => {
+    ensureAudioContext();
+    playSound(sound.id);
+  });
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'profile-icon';
+  remove.textContent = '×';
+  remove.title = `Remove ${sound.name}`;
+  remove.setAttribute('aria-label', `Remove ${sound.name}`);
+  remove.addEventListener('click', () => deleteSound(sound));
+
+  item.append(main, play, remove);
+  return item;
+}
+
+function renderSounds() {
+  if (!els.habitSound || !els.purchaseSound) return;
+
+  fillSoundSelect(els.habitSound, (settings.sounds && settings.sounds.habit) || 'chime');
+  fillSoundSelect(els.purchaseSound, (settings.sounds && settings.sounds.purchase) || 'pop');
+
+  const custom = customSounds();
+  els.soundList.replaceChildren(...custom.map(soundRow));
+  els.soundList.hidden = custom.length === 0;
+}
+
 function renderSettings() {
   if (document.activeElement !== els.etherFactor) {
     els.etherFactor.value = String(settings.etherFactor);
+  }
+  renderSounds();
+}
+
+async function saveSoundChoice(slot, value) {
+  try {
+    settings = await api('/api/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ sounds: { [slot]: value } }),
+    });
+    renderSounds();
+    playSound(value);
+    toast(`${slot === 'habit' ? 'Habit' : 'Purchase'} sound set to ${soundName(value)}.`);
+  } catch (error) {
+    toast(error.message);
+    renderSounds();
+  }
+}
+
+async function addSound(event) {
+  event.preventDefault();
+
+  const name = els.soundName.value.trim();
+  const url = els.soundUrl.value.trim();
+  if (!name || !url) return;
+
+  try {
+    const data = await api('/api/settings/sounds', {
+      method: 'POST',
+      body: JSON.stringify({ name, url }),
+    });
+    settings = { ...settings, sounds: data.sounds };
+    els.soundForm.reset();
+    renderSounds();
+    ensureAudioContext();
+    playSound(data.sound.id);
+    toast(`${data.sound.name} added.`);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function deleteSound(sound) {
+  if (!window.confirm(`Remove "${sound.name}"?`)) return;
+
+  try {
+    settings = await api(`/api/settings/sounds/${sound.id}`, { method: 'DELETE' });
+    renderSounds();
+    toast(`${sound.name} removed.`);
+  } catch (error) {
+    toast(error.message);
   }
 }
 
@@ -1539,7 +1723,10 @@ async function load({ silent = false } = {}) {
   try {
     const data = await api('/api/overview');
     profiles = data.profiles;
-    settings = data.settings || { etherFactor: 1 };
+    settings = data.settings || {
+      etherFactor: 1,
+      sounds: { habit: 'chime', purchase: 'pop', custom: [] },
+    };
     shop = data.shop && Array.isArray(data.shop.items) ? data.shop : { items: [] };
     today = data.today;
 
@@ -1761,6 +1948,18 @@ document.addEventListener('keydown', (event) => {
 
 els.profileAdd.addEventListener('click', createProfile);
 els.etherForm.addEventListener('submit', saveEtherFactor);
+els.habitSound.addEventListener('change', () => saveSoundChoice('habit', els.habitSound.value));
+els.purchaseSound.addEventListener('change', () =>
+  saveSoundChoice('purchase', els.purchaseSound.value),
+);
+els.soundPreviews.forEach((button) => {
+  button.addEventListener('click', () => {
+    const slot = button.dataset.preview === 'purchase' ? 'purchase' : 'habit';
+    ensureAudioContext();
+    playSound((settings.sounds && settings.sounds[slot]) || (slot === 'habit' ? 'chime' : 'pop'));
+  });
+});
+els.soundForm.addEventListener('submit', addSound);
 els.shopForm.addEventListener('submit', addShopItem);
 els.shopAddToggle.addEventListener('click', () => setShopFormOpen(true));
 els.shopFormClose.addEventListener('click', () => setShopFormOpen(false));
