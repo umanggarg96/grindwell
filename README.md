@@ -15,6 +15,12 @@ npm start
 
 Then open <http://localhost:3000>, or `http://<your-machine-ip>:3000` from your phone on the same network.
 
+The app has three pages, linked from the nav bar:
+
+- **Habits** (`/`) — today's checklist and progress.
+- **Dashboard** (`/dashboard`) — the active profile's ether balance and daily chart.
+- **Settings** (`/settings`) — the global ether reward rate.
+
 For development with auto-restart on file changes:
 
 ```sh
@@ -61,15 +67,18 @@ ether = max(1, round(difficulty × factor))
 ```
 
 - The **factor** is one global setting, default **1**, so difficulty 4 earns 4 ether. It can be
-  set between `0.1` and `10` in the dashboard (or with `PATCH /api/settings`). The `max(1, …)`
-  floor means even a difficulty-1 habit always earns at least one ether.
+  set between `0.1` and `10` on the **Settings** page (or with `PATCH /api/settings`). The
+  `max(1, …)` floor means even a difficulty-1 habit always earns at least one ether.
 - Rewards are **locked in when you check a habit**. Changing the factor or editing a habit's
   difficulty later only affects future completions, so your history and weekly trends stay put.
 - Unchecking a habit removes that day's ether.
-- The dashboard shows the profile's total balance, ether earned today, ether over the last seven
-  days, and a bar for each day. Switching profiles switches the balance because ether is stored
-  per profile.
+- The **Dashboard** page shows the active profile's total balance, ether earned today, ether over
+  the last seven days, and a bar for each day. Switching profiles switches the balance because
+  ether is stored per profile. The dashboard is tinted with that profile's selected palette.
 - There is no streak bonus; difficulty is the only input.
+
+The nav bar, header, profile row, and settings controls deliberately use neutral greys, so the
+palette colour is reserved for the dashboard and the habit content.
 
 ## Resetting
 
@@ -161,6 +170,10 @@ docker run -d --name grindwell -p 3000:3000 -v grindwell-data:/data grindwell
 | `DELETE` | `/api/habits/:id`          | —                                             | `204`                     |
 | `GET`    | `/api/health`              | —                                             | `{ ok, today }`           |
 
+`GET /dashboard` and `GET /settings` serve the same single-page document as `/`; the client
+chooses which view to show from the URL. This keeps the HTML, theme bootstrap, and profile bar in
+one place without a build step.
+
 All `/api/habits` routes apply to the **active profile**. A profile summary is
 `{ id, name, theme, habitCount, ether }`. `theme` must be one of the palette ids below; it
 defaults to `ember`. Creating a profile switches to it, and deleting the active profile switches
@@ -218,6 +231,10 @@ The choice belongs to the **active profile** and is saved to `data.json` via
 `PATCH /api/profiles/:id`, so switching profiles switches the theme too. A copy is kept in
 `localStorage` and applied by a tiny inline script before first paint so there is no colour flash
 on reload.
+
+The palette colours the **Dashboard** and the habit content. Shared chrome — the nav bar, header,
+profile row, and Settings controls — stays neutral grey so it does not compete with the selected
+theme.
 
 To add a palette, define a `[data-theme="name"]` block of accent variables in
 `public/styles.css`, add the matching `{ id, name }` entry to `THEMES` in `public/app.js`, and add

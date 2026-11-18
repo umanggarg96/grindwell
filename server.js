@@ -441,6 +441,9 @@ function readJson(req) {
   });
 }
 
+// Client-side pages share one document; these clean URLs all serve index.html.
+const APP_ROUTES = new Set(['/dashboard', '/settings']);
+
 function resolvePublicPath(pathname) {
   let decoded;
   try {
@@ -449,7 +452,8 @@ function resolvePublicPath(pathname) {
     return null;
   }
 
-  const relative = decoded === '/' ? 'index.html' : decoded;
+  const route = decoded.replace(/\/+$/, '') || '/';
+  const relative = route === '/' || APP_ROUTES.has(route) ? 'index.html' : decoded;
   const resolved = path.resolve(PUBLIC_DIR, `.${path.sep}${relative}`);
 
   if (resolved !== PUBLIC_DIR && !resolved.startsWith(PUBLIC_DIR + path.sep)) {

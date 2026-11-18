@@ -91,55 +91,101 @@
         </button>
       </section>
 
-      <section class="progress-card" aria-live="polite">
-        <p class="progress-text">
-          <strong id="done-count">0</strong> of <span id="total-count">0</span> done today
+      <nav class="page-nav" aria-label="Pages">
+        <a href="/" data-nav="habits">Habits</a>
+        <a href="/dashboard" data-nav="dashboard">Dashboard</a>
+        <a href="/settings" data-nav="settings">Settings</a>
+      </nav>
+
+      <div class="page" id="page-habits">
+        <section class="progress-card" aria-live="polite">
+          <p class="progress-text">
+            <strong id="done-count">0</strong> of <span id="total-count">0</span> done today
+          </p>
+          <div
+            class="bar"
+            role="progressbar"
+            aria-label="Habits completed today"
+            aria-valuemin="0"
+            aria-valuemax="100"
+            aria-valuenow="0"
+            id="bar"
+          >
+            <div class="bar-fill" id="bar-fill"></div>
+          </div>
+          <p class="hint" id="hint">Nothing here yet.</p>
+        </section>
+
+        <form class="add" id="add-form" autocomplete="off">
+          <div class="add-row">
+            <label class="sr-only" for="habit-input">New habit</label>
+            <input
+              class="text-input"
+              id="habit-input"
+              name="name"
+              type="text"
+              placeholder="Read 10 pages ; 6 ; sat,sun"
+              maxlength="100"
+              required
+            />
+            <button type="submit">Add</button>
+          </div>
+        </form>
+
+        <ul class="habits" id="habit-list" aria-label="Habits"></ul>
+
+        <p class="empty" id="empty">No habits yet. Add your first one above.</p>
+      </div>
+
+      <section class="page" id="page-dashboard" hidden aria-labelledby="dashboard-title">
+        <header class="page-head">
+          <h2 class="page-title" id="dashboard-title">Dashboard</h2>
+          <p class="page-subtitle" id="dashboard-profile">Ether for this profile</p>
+        </header>
+
+        <section class="ether-card" aria-labelledby="ether-title">
+          <div class="ether-head">
+            <div>
+              <p class="ether-title" id="ether-title">Ether</p>
+              <p class="ether-total">
+                <strong id="ether-total">0</strong>
+                <span>earned</span>
+              </p>
+            </div>
+            <dl class="ether-stats">
+              <div>
+                <dt>Today</dt>
+                <dd id="ether-today">0</dd>
+              </div>
+              <div>
+                <dt>Last 7 days</dt>
+                <dd id="ether-week">0</dd>
+              </div>
+            </dl>
+          </div>
+
+          <div
+            class="ether-chart"
+            id="ether-chart"
+            role="img"
+            aria-label="Ether earned per day over the last seven days"
+          ></div>
+        </section>
+
+        <p class="page-hint">
+          The reward rate is global. Adjust it in <a href="/settings">Settings</a>.
         </p>
-        <div
-          class="bar"
-          role="progressbar"
-          aria-label="Habits completed today"
-          aria-valuemin="0"
-          aria-valuemax="100"
-          aria-valuenow="0"
-          id="bar"
-        >
-          <div class="bar-fill" id="bar-fill"></div>
-        </div>
-        <p class="hint" id="hint">Nothing here yet.</p>
       </section>
 
-      <section class="ether-card" aria-labelledby="ether-title">
-        <div class="ether-head">
-          <div>
-            <p class="ether-title" id="ether-title">Ether</p>
-            <p class="ether-total">
-              <strong id="ether-total">0</strong>
-              <span>earned</span>
-            </p>
-          </div>
-          <dl class="ether-stats">
-            <div>
-              <dt>Today</dt>
-              <dd id="ether-today">0</dd>
-            </div>
-            <div>
-              <dt>Last 7 days</dt>
-              <dd id="ether-week">0</dd>
-            </div>
-          </dl>
-        </div>
+      <section class="page" id="page-settings" hidden aria-labelledby="settings-title">
+        <header class="page-head">
+          <h2 class="page-title" id="settings-title">Settings</h2>
+          <p class="page-subtitle">Global reward rate</p>
+        </header>
 
-        <div
-          class="ether-chart"
-          id="ether-chart"
-          role="img"
-          aria-label="Ether earned per day over the last seven days"
-        ></div>
-
-        <form class="ether-factor" id="ether-form">
+        <form class="settings-card factor-form" id="ether-form">
           <label for="ether-factor">Ether per difficulty point</label>
-          <div class="ether-factor-row">
+          <div class="factor-row">
             <input
               id="ether-factor"
               name="factor"
@@ -152,31 +198,12 @@
             />
             <button type="submit">Save</button>
           </div>
-          <p class="ether-note">
-            Global reward rate. Changes apply to future completions; earned ether is locked in.
+          <p class="factor-note">
+            Every completion earns <strong>max(1, round(difficulty × factor))</strong> ether.
+            Changes apply to future completions; earned ether is locked in.
           </p>
         </form>
       </section>
-
-      <form class="add" id="add-form" autocomplete="off">
-        <div class="add-row">
-          <label class="sr-only" for="habit-input">New habit</label>
-          <input
-            class="text-input"
-            id="habit-input"
-            name="name"
-            type="text"
-            placeholder="Read 10 pages ; 6 ; sat,sun"
-            maxlength="100"
-            required
-          />
-          <button type="submit">Add</button>
-        </div>
-      </form>
-
-      <ul class="habits" id="habit-list" aria-label="Habits"></ul>
-
-      <p class="empty" id="empty">No habits yet. Add your first one above.</p>
     </main>
 
     <script src="/habit-input.js"></script>

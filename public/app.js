@@ -25,6 +25,13 @@ const els = {
   etherChart: document.getElementById('ether-chart'),
   etherForm: document.getElementById('ether-form'),
   etherFactor: document.getElementById('ether-factor'),
+  dashboardProfile: document.getElementById('dashboard-profile'),
+  pages: {
+    habits: document.getElementById('page-habits'),
+    dashboard: document.getElementById('page-dashboard'),
+    settings: document.getElementById('page-settings'),
+  },
+  navLinks: document.querySelectorAll('[data-nav]'),
 };
 
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
@@ -43,6 +50,9 @@ const THEMES = [
   { id: 'rose', name: 'Rose' },
 ];
 const THEME_KEY = 'grindwell.theme';
+const PAGE_PATH = window.location.pathname.replace(/\/+$/, '') || '/';
+const PAGE =
+  PAGE_PATH === '/dashboard' ? 'dashboard' : PAGE_PATH === '/settings' ? 'settings' : 'habits';
 
 let habits = [];
 let profiles = [];
@@ -129,6 +139,24 @@ function scheduleLabel(days) {
   return WEEK_ORDER.filter((day) => selected.has(day))
     .map((day) => DAY_SHORT[day])
     .join(', ');
+}
+
+/* ---------- pages ---------- */
+
+function applyPage() {
+  document.body.dataset.page = PAGE;
+
+  for (const [name, node] of Object.entries(els.pages)) {
+    if (node) node.hidden = name !== PAGE;
+  }
+
+  // Reset only makes sense on the habits page.
+  els.reset.hidden = PAGE !== 'habits';
+
+  for (const link of els.navLinks) {
+    if (link.dataset.nav === PAGE) link.setAttribute('aria-current', 'page');
+    else link.removeAttribute('aria-current');
+  }
 }
 
 /* ---------- theme ---------- */
@@ -626,6 +654,7 @@ async function load({ silent = false } = {}) {
 
     applyTheme(activeProfile.theme);
     renderProfiles();
+    els.dashboardProfile.textContent = `Ether for ${activeProfile.name}`;
 
     els.date.textContent = new Date().toLocaleDateString(undefined, {
       weekday: 'long',
@@ -854,6 +883,7 @@ setInterval(() => {
   if (today && localDayKey() !== today) load({ silent: true });
 }, 60 * 1000);
 
+applyPage();
 buildThemes();
 
 load();
