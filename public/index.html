@@ -153,7 +153,7 @@
         <header class="page-head dashboard-head">
           <div class="page-head-text">
             <h2 class="page-title" id="dashboard-title">Dashboard</h2>
-            <p class="page-subtitle">Ether balances across every profile</p>
+            <p class="page-subtitle">Ether balances and habit trends across every profile</p>
           </div>
           <label class="range-control">
             <span>Range</span>
@@ -164,34 +164,75 @@
           </label>
         </header>
 
-        <section class="ether-card dashboard-total" aria-labelledby="dashboard-total-title">
-          <div class="ether-head">
-            <div>
-              <p class="ether-title" id="dashboard-total-title">All profiles</p>
-              <p class="ether-total">
-                <svg class="ether-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
-                  <use href="#icon-ether"></use>
-                </svg>
-                <strong id="ether-total">0</strong>
-                <span>ether balance</span>
-              </p>
+        <div class="dashboard-tabs" id="dashboard-tabs" role="tablist" aria-label="Dashboard view">
+          <button
+            class="dashboard-tab"
+            id="dashboard-tab-ether"
+            type="button"
+            role="tab"
+            aria-selected="true"
+            aria-controls="dashboard-panel-ether"
+            data-view="ether"
+          >
+            Ether trends
+          </button>
+          <button
+            class="dashboard-tab"
+            id="dashboard-tab-habits"
+            type="button"
+            role="tab"
+            aria-selected="false"
+            aria-controls="dashboard-panel-habits"
+            data-view="habit"
+            tabindex="-1"
+          >
+            Habit trends
+          </button>
+        </div>
+
+        <div
+          class="dashboard-panel"
+          id="dashboard-panel-ether"
+          role="tabpanel"
+          aria-labelledby="dashboard-tab-ether"
+        >
+          <section class="ether-card dashboard-total" aria-labelledby="dashboard-total-title">
+            <div class="ether-head">
+              <div>
+                <p class="ether-title" id="dashboard-total-title">All profiles</p>
+                <p class="ether-total">
+                  <svg class="ether-icon" viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+                    <use href="#icon-ether"></use>
+                  </svg>
+                  <strong id="ether-total">0</strong>
+                  <span>ether balance</span>
+                </p>
+              </div>
+              <dl class="ether-stats">
+                <div>
+                  <dt>Today</dt>
+                  <dd id="ether-today">0</dd>
+                </div>
+                <div>
+                  <dt id="ether-range-label">Last 7 days</dt>
+                  <dd id="ether-range">0</dd>
+                </div>
+              </dl>
             </div>
-            <dl class="ether-stats">
-              <div>
-                <dt>Today</dt>
-                <dd id="ether-today">0</dd>
-              </div>
-              <div>
-                <dt id="ether-range-label">Last 7 days</dt>
-                <dd id="ether-range">0</dd>
-              </div>
-            </dl>
-          </div>
-        </section>
+          </section>
 
-        <div class="dashboard-trends" id="dashboard-trends"></div>
+          <div class="dashboard-list" id="dashboard-list"></div>
+        </div>
 
-        <div class="dashboard-list" id="dashboard-list"></div>
+        <div
+          class="dashboard-panel"
+          id="dashboard-panel-habits"
+          role="tabpanel"
+          aria-labelledby="dashboard-tab-habits"
+          hidden
+        >
+          <div class="dashboard-list" id="dashboard-habits"></div>
+        </div>
 
         <p class="page-hint">
           Rewards are global. Adjust the rate in <a href="/settings">Settings</a>.

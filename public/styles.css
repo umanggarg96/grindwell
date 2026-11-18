@@ -745,6 +745,61 @@ body[data-page="shop"] .page-title {
   gap: 12px;
 }
 
+.dashboard-tabs {
+  display: flex;
+  gap: 6px;
+  margin: -4px;
+  padding: 4px;
+  overflow-x: auto;
+  border-bottom: 1px solid var(--border);
+  scrollbar-width: none;
+}
+
+.dashboard-tabs::-webkit-scrollbar {
+  display: none;
+}
+
+.dashboard-tab {
+  flex: none;
+  height: 36px;
+  padding: 0 14px;
+  border: 1px solid transparent;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s, background 0.15s, border-color 0.15s;
+}
+
+.dashboard-tab:hover {
+  color: var(--text);
+  background: rgba(var(--tint-rgb), 0.04);
+}
+
+.dashboard-tab[aria-selected="true"] {
+  border-color: rgba(var(--chrome-rgb), 0.45);
+  background: rgba(var(--chrome-rgb), 0.14);
+  color: var(--chrome-bright);
+}
+
+.dashboard-tab:focus-visible {
+  outline: 2px solid var(--chrome-bright);
+  outline-offset: 2px;
+}
+
+.dashboard-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.dashboard-panel[hidden] {
+  display: none;
+}
+
 .range-control {
   flex: none;
   display: inline-flex;
@@ -1308,37 +1363,16 @@ body[data-page="shop"] .page-title {
   color: var(--chrome-bright);
 }
 
-.dashboard-trends {
-  display: grid;
-}
-
-.trends-card {
-  border-color: rgba(var(--chrome-rgb), 0.28);
-  background: linear-gradient(180deg, rgba(var(--chrome-rgb), 0.08), var(--surface));
-}
-
-.trends-card .ether-title {
-  color: var(--chrome);
-}
-
-.trends-card .ether-total strong {
-  color: var(--chrome-bright);
-}
-
-.trends-chart .ether-bar {
-  background: linear-gradient(180deg, var(--chrome-bright), var(--chrome));
-}
-
-.trends-chart .ether-day.is-today .ether-bar {
-  box-shadow: 0 0 14px rgba(var(--chrome-bright-rgb), 0.35);
-}
-
-.trends-chart .ether-day.is-today .ether-day-value {
-  color: var(--chrome-bright);
-}
-
 .dashboard-card {
   gap: 14px;
+}
+
+.habit-card .ether-total strong {
+  color: var(--accent-text);
+}
+
+.habit-card .habit-chart .ether-bar {
+  background: linear-gradient(180deg, var(--accent-bright), var(--accent));
 }
 
 .dashboard-card .ether-title {

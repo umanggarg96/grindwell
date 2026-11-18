@@ -19,7 +19,8 @@ The app has four pages, linked from the nav bar:
 
 - **Habits** (`/`) — a tab per profile with that person's checklist for today.
 - **Dashboard** (`/dashboard`) — a combined ether balance plus a colour-coded card and chart for
-  every profile, switchable between the last 7 days and the last 30 days.
+  every profile, with separate **Ether trends** and **Habit trends** views, switchable between the
+  last 7 days and the last 30 days.
 - **Shop** (`/shop`) — a shared list of rewards everyone can add and buy with ether.
 - **Settings** (`/settings`) — the global ether reward rate, sounds, and profile management.
 
@@ -93,12 +94,13 @@ Ether amounts are marked with a small sparkle icon so the currency is easy to sp
 - Spending ether in the **Shop** lowers that profile's balance. The dashboard's combined total shows
   the current balance, while each profile card's headline shows lifetime ether earned (including
   ether already spent); today and the range chart also count earned ether.
-- The **Dashboard** page shows a combined balance for all profiles plus one card per profile with its
-  lifetime ether earned, ether earned today, ether over the selected range, and a bar for each day. A
-  **Habit trends** card above the profile cards counts how many habits were completed each day, with
-  the same range selector. Use the **Range** dropdown on the page to switch between the last 7 days
-  and the last 30 days. Each profile card is tinted with that profile's selected palette, so people
-  can tell their progress apart at a glance.
+- The **Dashboard** page has two sub-pages, **Ether trends** and **Habit trends**. Ether trends shows
+  a combined balance for all profiles plus one card per profile with its lifetime ether earned, ether
+  earned today, ether over the selected range, and a bar for each day. Habit trends shows one card per
+  profile counting how many habits that person completed each day, with its own chart. Use the
+  **Range** dropdown to switch both views between the last 7 days and the last 30 days. Each profile
+  card is tinted with that profile's selected palette, so people can tell their progress apart at a
+  glance.
 - Checking a habit plays a short chime. It is synthesised in the browser, so it needs no audio file.
   You can change it, or the Shop purchase sound, on the **Settings** page; see **Sounds** below.
 - There is no streak bonus; difficulty is the only input.
@@ -350,7 +352,7 @@ A public profile is `{ id, name, theme, habitCount, ether, earned, spent }`. `et
 current balance, `earned` is all ether ever earned, and `spent` is the amount spent in the Shop.
 `summary.total` is the balance while `summary.today`, `last7`, `last30`, and `days` count earned
 ether. `summary.completedToday`, `completedLast7`, `completedLast30`, and `days[].completed` count
-habit completions for the Trends card. `theme` must be one of the palette ids below; it defaults to
+habit completions for the per-profile Habit trends cards. `theme` must be one of the palette ids below; it defaults to
 `ember`. Creating a profile switches the server's active profile to it, and deleting the active
 profile switches to the first remaining one. The last profile cannot be deleted. `activeProfileId`
 tells the Habits page which tab to open first.

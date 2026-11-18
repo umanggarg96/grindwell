@@ -1207,7 +1207,11 @@ try {
       'ether-range',
       'ether-range-label',
       'dashboard-range',
+      'dashboard-tabs',
+      'dashboard-panel-ether',
+      'dashboard-panel-habits',
       'dashboard-list',
+      'dashboard-habits',
       'ether-form',
       'ether-factor',
     ].every((id) => html.includes(`id="${id}"`)),
@@ -1242,17 +1246,33 @@ try {
       js.includes("els.dashboardRange.addEventListener('change'"),
   );
   check(
-    'dashboard trends card tracks daily completions',
-    html.includes('id="dashboard-trends"') &&
-      js.includes('function completionDays') &&
-      js.includes('function completionChart') &&
-      js.includes('function trendsCard') &&
-      js.includes('els.dashboardTrends.replaceChildren(trendsCard())') &&
-      js.includes("day.completed / max"),
+    'dashboard splits ether and habit trends into sub-pages',
+    html.includes('id="dashboard-tabs"') &&
+      html.includes('role="tablist"') &&
+      html.includes('id="dashboard-tab-ether"') &&
+      html.includes('id="dashboard-tab-habits"') &&
+      html.includes('id="dashboard-panel-ether"') &&
+      html.includes('id="dashboard-panel-habits"') &&
+      html.includes('role="tabpanel"'),
   );
   check(
-    'trends card styles present',
-    css.includes('.trends-card') && css.includes('.trends-chart'),
+    'habit trends render a separate chart for each profile',
+    js.includes('function habitTrendCard') &&
+      js.includes('profiles.map(habitTrendCard)') &&
+      js.includes('function completionChart') &&
+      js.includes('completionChart(days, profile.name)') &&
+      js.includes('card.dataset.theme = profile.theme') &&
+      !js.includes('function completionDays') &&
+      !js.includes('function trendsCard') &&
+      js.includes("DASHBOARD_VIEW_KEY = 'grindwell.dashboardView'") &&
+      js.includes('function setDashboardView'),
+  );
+  check(
+    'dashboard sub-page styles present',
+    css.includes('.dashboard-tabs') &&
+      css.includes('.dashboard-tab') &&
+      css.includes('.dashboard-panel') &&
+      css.includes('.habit-chart'),
   );
   check(
     'difficulty renders as stars and the card reward chip is gone',

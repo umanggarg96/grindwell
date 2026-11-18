@@ -71,7 +71,7 @@ These conventions are intentional. Do not undo them without asking.
 
 - Four shared pages, selected client-side from the URL:
   - `/` — **Habits**: a tab per profile with that profile's checklist.
-  - `/dashboard` — **Dashboard**: combined ether balance plus one themed card per profile.
+  - `/dashboard` — **Dashboard**: Ether trends and Habit trends sub-pages, each with one themed card per profile.
   - `/shop` — **Shop**: shared reward items, contributor checkboxes, and purchases.
   - `/settings` — **Settings**: global ether factor, sounds, and profile management.
 - The server stores `activeProfileId` so a reload opens the last selected Habits tab. Habit routes
@@ -156,9 +156,9 @@ CHROME=/path/to/chrome
 ```
 
 Check `/dashboard`, `/shop`, and `/settings` the same way. The DOM should contain generated profile
-tabs, dashboard cards, theme pickers, and shop items. Check both appearances: the toggle must flip
-`<html data-appearance>` between `dark` and `light`, update the label and `aria-pressed`, and leave
-profile accents intact.
+tabs, the Ether trends and Habit trends sub-page tabs, dashboard and habit cards, theme pickers, and
+shop items. Check both appearances: the toggle must flip `<html data-appearance>` between `dark` and
+`light`, update the label and `aria-pressed`, and leave profile accents intact.
 
 ## Data model and persistence
 
@@ -285,7 +285,7 @@ Details:
   `{ factor, total, earned, spent, today, last7, last30, completedToday, completedLast7,
   completedLast30, days: [{ date, ether, completed } × 30] }`. `total` is the current balance;
   `today`, `last7`, `last30`, and `days[].ether` count earned ether; the `completed*` fields and
-  `days[].completed` count habit completions for the Trends card.
+  `days[].completed` count habit completions for the per-profile Habit trends cards.
 - A public habit is `{ id, name, createdAt, difficulty, days, dueToday, doneToday, streak, reward,
   earnedToday }`.
 - A public shop item is
@@ -314,7 +314,8 @@ Details:
 
 - `els` caches DOM nodes.
 - State: `profiles` (from `/api/overview`), `settings`, `shop`, `today`, `activeTabId`, `editingKey`,
-  `editDraft`, `dashboardRange` (`'week'` or `'month'`, persisted in `localStorage`), and
+  `editDraft`, `dashboardRange` (`'week'` or `'month'`, persisted in `localStorage`),
+  `dashboardView` (`'ether'` or `'habit'`, persisted in `localStorage`), and
   `appearance` (`'dark'` or `'light'`, persisted in `localStorage`).
 - The appearance bootstrap in `public/index.html` sets `data-appearance` before paint so light mode
   does not flash dark. It reads `localStorage` first, then falls back to `prefers-color-scheme`.
@@ -324,7 +325,8 @@ Details:
 - `load()` fetches `/api/overview` and calls:
   - `renderProfileSettings()` — profile rows on Settings, including theme pickers.
   - `renderHabits()` — the profile tab bar plus the selected profile's checklist.
-  - `renderDashboard()` — combined balances, the Trends card, plus one `.dashboard-card` per profile.
+  - `renderDashboard()` — combined balances, one `.dashboard-card` per profile on the Ether trends
+    sub-page, and one `.habit-card` per profile on the Habit trends sub-page.
   - `renderShop()` — shop balance, the Consumables and Rewards sections, item cards and tiles,
     progress bars, and contributor checkboxes.
   - `renderSettings()` — ether factor field, sound pickers, and the app icon picker.
@@ -355,11 +357,16 @@ Details:
   headline number is `summary.earned` (lifetime ether earned, including ether already spent); the
   combined dashboard total is the current balance. `rangeDays()` and `rangeEther()` slice the 30-day
   summary by `dashboardRange`.
-- `trendsCard()` aggregates `summary.days[].completed` across every profile through
-  `completionDays()` and `rangeCompletions()`, then renders a shared-chrome `completionChart()`.
-  `#dashboard-trends` sits between the combined total and the profile cards and follows the same
-  range selector. Use `--chrome*` variables, not profile accents, for the Trends card.
-- The Dashboard's `#dashboard-range` select switches `dashboardRange` and re-renders without a reload.
+- `habitTrendCard(profile)` renders one per-profile Habit trends card. It sets
+  `card.dataset.theme = profile.theme` and uses `rangeDays()` plus `rangeCompletions()` to count
+  `summary.days[].completed` for that profile only, then renders `completionChart(days, profile.name)`.
+  There is no merged cross-profile completion graph.
+- `#dashboard-tabs` switches `dashboardView` between the `#dashboard-panel-ether` and
+  `#dashboard-panel-habits` tabpanels. `applyDashboardView()`, `setDashboardView()`, and
+  `onDashboardTabKeydown()` keep `aria-selected`, `tabindex`, hidden panels, and arrow/Home/End key
+  movement in sync. The choice is stored under `grindwell.dashboardView`.
+- The Dashboard's `#dashboard-range` select switches `dashboardRange` and re-renders both sub-pages
+  without a reload.
 - `shopItemCard(item)` renders a reward as a wide card: image on the left, the name as a large link
   to the item page, and a side group holding the buy button and remove button in the same row. Then
   come the progress bar and one contributor checkbox per profile. Each checkbox label carries
@@ -417,6 +424,8 @@ Details:
 - Nav, page titles, dashboard totals, Shop controls, and Settings controls must not use `--accent`;
   tests enforce this. Contributor checkboxes are the exception: their labels carry a profile's
   `data-theme` so the checkbox and dot use that profile's palette.
+- The Dashboard's sub-page tab bar is shared chrome: use `--chrome*` variables for its selected tab,
+  border, and focus ring. The per-profile cards inside both sub-pages still use each profile's theme.
 - The header mark and icon picker are shared chrome. Use `--chrome*` variables for selected tiles,
   focus rings, and the panel border; do not tint them with a profile palette.
 - Keep `THEMES` in `public/app.js`, the `[data-theme]` blocks in `public/styles.css`, and
@@ -476,10 +485,11 @@ ether = max(1, round(difficulty × factor))
 - The dashboard shows a combined balance plus one card per profile. The combined total is the current
   balance; each card's headline is lifetime ether earned (`summary.earned`), and its today and range
   values count earned ether.
-- A shared **Habit trends** card counts completions per day across every profile. It uses the same
-  weekly/monthly range selector and reserved chrome colours rather than a profile palette.
-- The dashboard card is tinted with that profile's theme and follows the page's weekly/monthly range
-  selector (last 7 or last 30 days).
+- The Dashboard has separate **Ether trends** and **Habit trends** sub-pages. Ether trends holds the
+  combined balance and per-profile ether cards; Habit trends holds one completion card per profile,
+  each counting only that profile's completions. There is no merged habit graph.
+- Both sub-pages follow the same weekly/monthly range selector (last 7 or last 30 days), and each
+  profile card is tinted with that profile's theme.
 
 ### Sounds
 

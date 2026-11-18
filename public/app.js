@@ -31,8 +31,11 @@ const els = {
   etherRange: document.getElementById('ether-range'),
   etherRangeLabel: document.getElementById('ether-range-label'),
   dashboardRange: document.getElementById('dashboard-range'),
-  dashboardTrends: document.getElementById('dashboard-trends'),
+  dashboardTabs: document.getElementById('dashboard-tabs'),
+  dashboardEtherPanel: document.getElementById('dashboard-panel-ether'),
+  dashboardHabitsPanel: document.getElementById('dashboard-panel-habits'),
   dashboardList: document.getElementById('dashboard-list'),
+  dashboardHabits: document.getElementById('dashboard-habits'),
   shopAddToggle: document.getElementById('shop-add-toggle'),
   shopForm: document.getElementById('shop-form'),
   shopFormClose: document.getElementById('shop-form-close'),
@@ -111,6 +114,7 @@ const PAGE =
         ? 'shop'
         : 'habits';
 const DASHBOARD_RANGE_KEY = 'grindwell.dashboardRange';
+const DASHBOARD_VIEW_KEY = 'grindwell.dashboardView';
 const APPEARANCE_KEY = 'grindwell.appearance';
 const APPEARANCE_COLORS = { dark: '#100d0b', light: '#f6f2ec' };
 const SVG_NS = 'http://www.w3.org/2000/svg';
@@ -127,6 +131,7 @@ let shop = { items: [] };
 let today = '';
 let activeTabId = null;
 let dashboardRange = storedDashboardRange();
+let dashboardView = storedDashboardView();
 let appearance = document.documentElement.dataset.appearance === 'light' ? 'light' : 'dark';
 let toastTimer = null;
 let audioContext = null;
@@ -311,6 +316,22 @@ function rememberDashboardRange(value) {
   }
 }
 
+function storedDashboardView() {
+  try {
+    return localStorage.getItem(DASHBOARD_VIEW_KEY) === 'habit' ? 'habit' : 'ether';
+  } catch {
+    return 'ether';
+  }
+}
+
+function rememberDashboardView(value) {
+  try {
+    localStorage.setItem(DASHBOARD_VIEW_KEY, value);
+  } catch {
+    /* storage may be unavailable; the in-memory value still works */
+  }
+}
+
 function rememberAppearance(value) {
   try {
     localStorage.setItem(APPEARANCE_KEY, value);
@@ -358,23 +379,8 @@ function rangeEther(summary) {
     : Number(summary.last7) || 0;
 }
 
-// Every profile summary covers the same 30 days, so use one as the date axis and
-// add up each profile's completion counts for the selected range.
-function completionDays() {
-  const template = (profiles[0] && profiles[0].summary && profiles[0].summary.days) || [];
-  const slice = dashboardRange === 'month' ? template.slice(-30) : template.slice(-7);
-
-  return slice.map((day) => {
-    const completed = profiles.reduce((sum, profile) => {
-      const match = ((profile.summary && profile.summary.days) || []).find(
-        (entry) => entry.date === day.date,
-      );
-      return sum + (match ? Number(match.completed) || 0 : 0);
-    }, 0);
-    return { date: day.date, completed };
-  });
-}
-
+// Every profile summary covers the same 30 days, so the selected range can be
+// sliced once per profile when rendering its own chart.
 function rangeCompletions(days) {
   return days.reduce((sum, day) => sum + day.completed, 0);
 }
@@ -1052,12 +1058,15 @@ function etherChartNode(days, profileName) {
   return chart;
 }
 
-function completionChart(days) {
+function completionChart(days, profileName) {
   const monthly = dashboardRange === 'month';
   const chart = document.createElement('div');
-  chart.className = 'ether-chart trends-chart' + (monthly ? ' is-month' : '');
+  chart.className = 'ether-chart habit-chart' + (monthly ? ' is-month' : '');
   chart.setAttribute('role', 'img');
-  chart.setAttribute('aria-label', `Habits completed per day over the ${rangeLabel().toLowerCase()}`);
+  chart.setAttribute(
+    'aria-label',
+    `Habits completed per day over the ${rangeLabel().toLowerCase()} for ${profileName}`,
+  );
 
   const max = Math.max(1, ...days.map((day) => day.completed));
   const nodes = days.map((day, index) => {
@@ -1096,15 +1105,17 @@ function completionChart(days) {
   return chart;
 }
 
-function trendsCard() {
-  const days = completionDays();
+function habitTrendCard(profile) {
+  const summary = profile.summary || {};
+  const days = rangeDays(summary);
   const total = rangeCompletions(days);
   const todayCount = days.find((day) => day.date === today)?.completed || 0;
   const average = days.length ? Math.round((total / days.length) * 10) / 10 : 0;
 
   const card = document.createElement('section');
-  card.className = 'ether-card trends-card';
-  card.setAttribute('aria-labelledby', 'trends-title');
+  card.className = 'ether-card dashboard-card habit-card';
+  card.dataset.theme = profile.theme;
+  card.setAttribute('aria-labelledby', `habits-${profile.id}`);
 
   const head = document.createElement('div');
   head.className = 'ether-head';
@@ -1113,15 +1124,15 @@ function trendsCard() {
 
   const title = document.createElement('p');
   title.className = 'ether-title';
-  title.id = 'trends-title';
-  title.textContent = 'Habit trends';
+  title.id = `habits-${profile.id}`;
+  title.append(themeDot(), document.createTextNode(profile.name));
 
   const totalLine = document.createElement('p');
   totalLine.className = 'ether-total';
   const strong = document.createElement('strong');
   strong.textContent = String(total);
   const suffix = document.createElement('span');
-  suffix.textContent = total === 1 ? 'completion' : 'completions';
+  suffix.textContent = total === 1 ? 'habit completed' : 'habits completed';
   totalLine.append(strong, suffix);
 
   left.append(title, totalLine);
@@ -1131,7 +1142,7 @@ function trendsCard() {
   stats.append(statNode('Today', todayCount), statNode('Daily average', average));
 
   head.append(left, stats);
-  card.append(head, completionChart(days));
+  card.append(head, completionChart(days, profile.name));
   return card;
 }
 
@@ -1179,6 +1190,45 @@ function dashboardCard(profile) {
   return card;
 }
 
+function dashboardTabNodes() {
+  return [...(els.dashboardTabs ? els.dashboardTabs.querySelectorAll('[role="tab"]') : [])];
+}
+
+function applyDashboardView({ focus = false } = {}) {
+  const ether = dashboardView !== 'habit';
+  if (els.dashboardEtherPanel) els.dashboardEtherPanel.hidden = !ether;
+  if (els.dashboardHabitsPanel) els.dashboardHabitsPanel.hidden = ether;
+
+  for (const tab of dashboardTabNodes()) {
+    const selected = tab.dataset.view === dashboardView;
+    tab.setAttribute('aria-selected', String(selected));
+    tab.tabIndex = selected ? 0 : -1;
+    if (selected && focus) tab.focus();
+  }
+}
+
+function setDashboardView(view, { focus = false } = {}) {
+  dashboardView = view === 'habit' ? 'habit' : 'ether';
+  rememberDashboardView(dashboardView);
+  applyDashboardView({ focus });
+}
+
+function onDashboardTabKeydown(event) {
+  if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+
+  const tabs = dashboardTabNodes();
+  const index = tabs.findIndex((tab) => tab.dataset.view === dashboardView);
+  if (index === -1) return;
+
+  event.preventDefault();
+  let next = index;
+  if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+  if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+  if (event.key === 'Home') next = 0;
+  if (event.key === 'End') next = tabs.length - 1;
+  setDashboardView(tabs[next].dataset.view, { focus: true });
+}
+
 function renderDashboard() {
   const total = profiles.reduce((sum, profile) => sum + (profile.ether || 0), 0);
   const todayTotal = profiles.reduce(
@@ -1196,8 +1246,9 @@ function renderDashboard() {
   els.etherRange.textContent = String(rangeTotal);
   els.dashboardRange.value = dashboardRange;
 
-  els.dashboardTrends.replaceChildren(trendsCard());
   els.dashboardList.replaceChildren(...profiles.map(dashboardCard));
+  els.dashboardHabits.replaceChildren(...profiles.map(habitTrendCard));
+  applyDashboardView();
 }
 
 /* ---------- shop ---------- */
@@ -2330,6 +2381,10 @@ els.dashboardRange.addEventListener('change', () => {
   rememberDashboardRange(dashboardRange);
   renderDashboard();
 });
+for (const tab of dashboardTabNodes()) {
+  tab.addEventListener('click', () => setDashboardView(tab.dataset.view));
+  tab.addEventListener('keydown', onDashboardTabKeydown);
+}
 
 /* ---------- keep "today" honest ---------- */
 
@@ -2342,6 +2397,7 @@ setInterval(() => {
 }, 60 * 1000);
 
 applyPage();
+applyDashboardView();
 applyAppearance(appearance, { persist: false });
 
 load();
