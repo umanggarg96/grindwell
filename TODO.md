@@ -4,7 +4,7 @@ Project tasks for **grindwell**. Check off completed items and add new work belo
 
 ## Inbox
 
-- No open tasks.
+- Auto-fill new Shop items from `amazon.in` links: fetch the price, a short name, and the product image. Research found Amazon's official [Creators API `GetItems`](https://affiliate-program.amazon.com/creatorsapi/docs/en-us/api-reference/operations/get-items) (the successor to deprecated PA-API 5) supports title, image, and price for India (`www.amazon.in`, `INR`), but needs Associates credentials and 10 qualifying sales. Prefer the official API over brittle page scraping; keep the form editable when lookup is unavailable.
 
 ## Done
 
