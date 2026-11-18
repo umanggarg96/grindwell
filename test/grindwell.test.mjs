@@ -885,7 +885,20 @@ try {
     JSON.stringify(r.body.ether),
   );
   const baselineTotal = r.body.ether.total;
+  const baselineCompletions = r.body.ether.completedToday;
   check('dashboard starts from the current balance', baselineTotal >= 0, String(baselineTotal));
+  check(
+    'summary exposes completion counts',
+    typeof baselineCompletions === 'number' &&
+      typeof r.body.ether.completedLast7 === 'number' &&
+      typeof r.body.ether.completedLast30 === 'number' &&
+      typeof r.body.ether.days[29].completed === 'number',
+    JSON.stringify({
+      today: baselineCompletions,
+      last7: r.body.ether.completedLast7,
+      last30: r.body.ether.completedLast30,
+    }),
+  );
 
   r = await call('/api/habits', { method: 'POST', ...json({ name: 'Ether four', difficulty: 4 }) });
   const fourId = r.body.id;
@@ -897,6 +910,21 @@ try {
 
   r = await call(`/api/habits/${fourId}/toggle`, { method: 'POST', ...json({ done: true }) });
   check('completing a habit awards ether', r.body.earnedToday === 4, String(r.body.earnedToday));
+
+  r = await call('/api/habits');
+  check(
+    'summary counts today completions per day',
+    r.body.ether.completedToday === baselineCompletions + 1 &&
+      r.body.ether.days[29].completed === baselineCompletions + 1 &&
+      r.body.ether.completedLast7 >= 1 &&
+      r.body.ether.completedLast30 >= 1,
+    JSON.stringify({
+      today: r.body.ether.completedToday,
+      day: r.body.ether.days[29],
+      last7: r.body.ether.completedLast7,
+      last30: r.body.ether.completedLast30,
+    }),
+  );
 
   r = await call('/api/habits');
   check(
@@ -914,6 +942,11 @@ try {
   check('unchecking clears the day earning', r.body.earnedToday === 0);
   r = await call('/api/habits');
   check('dashboard total drops after unchecking', r.body.ether.total === baselineTotal);
+  check(
+    'unchecking removes the completion count',
+    r.body.ether.completedToday === baselineCompletions,
+    `${r.body.ether.completedToday} vs ${baselineCompletions}`,
+  );
 
   r = await call('/api/habits', { method: 'POST', ...json({ name: 'Locked reward', difficulty: 5 }) });
   const lockId = r.body.id;
@@ -1147,6 +1180,19 @@ try {
       js.includes('function rangeDays') &&
       js.includes('function rangeEther') &&
       js.includes("els.dashboardRange.addEventListener('change'"),
+  );
+  check(
+    'dashboard trends card tracks daily completions',
+    html.includes('id="dashboard-trends"') &&
+      js.includes('function completionDays') &&
+      js.includes('function completionChart') &&
+      js.includes('function trendsCard') &&
+      js.includes('els.dashboardTrends.replaceChildren(trendsCard())') &&
+      js.includes("day.completed / max"),
+  );
+  check(
+    'trends card styles present',
+    css.includes('.trends-card') && css.includes('.trends-chart'),
   );
   check(
     'difficulty renders as stars and the card reward chip is gone',

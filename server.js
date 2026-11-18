@@ -304,9 +304,15 @@ function etherBalance(profile) {
 
 function etherSummary(profile) {
   const byDate = new Map();
+  const completionsByDate = new Map();
   addEarnings(byDate, retiredEarningsOf(profile));
   for (const habit of profile.habits || []) {
     addEarnings(byDate, earningsOf(habit));
+    const completions = Array.isArray(habit.completions) ? habit.completions : [];
+    for (const date of completions) {
+      if (typeof date !== 'string') continue;
+      completionsByDate.set(date, (completionsByDate.get(date) || 0) + 1);
+    }
   }
 
   const now = new Date();
@@ -314,7 +320,11 @@ function etherSummary(profile) {
   for (let offset = 29; offset >= 0; offset -= 1) {
     const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
     const key = dayKey(date);
-    days.push({ date: key, ether: byDate.get(key) || 0 });
+    days.push({
+      date: key,
+      ether: byDate.get(key) || 0,
+      completed: completionsByDate.get(key) || 0,
+    });
   }
 
   return {
@@ -325,6 +335,9 @@ function etherSummary(profile) {
     today: byDate.get(dayKey(now)) || 0,
     last7: days.slice(-7).reduce((sum, day) => sum + day.ether, 0),
     last30: days.reduce((sum, day) => sum + day.ether, 0),
+    completedToday: completionsByDate.get(dayKey(now)) || 0,
+    completedLast7: days.slice(-7).reduce((sum, day) => sum + day.completed, 0),
+    completedLast30: days.reduce((sum, day) => sum + day.completed, 0),
     days,
   };
 }

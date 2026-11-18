@@ -94,9 +94,11 @@ Ether amounts are marked with a small sparkle icon so the currency is easy to sp
   the current balance, while each profile card's headline shows lifetime ether earned (including
   ether already spent); today and the range chart also count earned ether.
 - The **Dashboard** page shows a combined balance for all profiles plus one card per profile with its
-  lifetime ether earned, ether earned today, ether over the selected range, and a bar for each day. Use the
-  **Range** dropdown on the page to switch between the last 7 days and the last 30 days. Each card is
-  tinted with that profile's selected palette, so people can tell their progress apart at a glance.
+  lifetime ether earned, ether earned today, ether over the selected range, and a bar for each day. A
+  **Habit trends** card above the profile cards counts how many habits were completed each day, with
+  the same range selector. Use the **Range** dropdown on the page to switch between the last 7 days
+  and the last 30 days. Each profile card is tinted with that profile's selected palette, so people
+  can tell their progress apart at a glance.
 - Checking a habit plays a short chime. It is synthesised in the browser, so it needs no audio file.
   You can change it, or the Shop purchase sound, on the **Settings** page; see **Sounds** below.
 - There is no streak bonus; difficulty is the only input.
@@ -313,7 +315,10 @@ plus the shared `shop`:
         "today": 9,
         "last7": 28,
         "last30": 35,
-        "days": [{ "date": "2026-10-20", "ether": 4 }, "… 30 days ending today"]
+        "completedToday": 3,
+        "completedLast7": 14,
+        "completedLast30": 19,
+        "days": [{ "date": "2026-10-20", "ether": 4, "completed": 2 }, "… 30 days ending today"]
       },
       "habits": ["… same shape as GET /api/habits"]
     }
@@ -325,10 +330,11 @@ plus the shared `shop`:
 A public profile is `{ id, name, theme, habitCount, ether, earned, spent }`. `ether` is the
 current balance, `earned` is all ether ever earned, and `spent` is the amount spent in the Shop.
 `summary.total` is the balance while `summary.today`, `last7`, `last30`, and `days` count earned
-ether. `theme` must be one of the palette ids below; it defaults to `ember`. Creating a profile
-switches the server's active profile to it, and deleting the active profile switches to the first
-remaining one. The last profile cannot be deleted. `activeProfileId` tells the Habits page which tab
-to open first.
+ether. `summary.completedToday`, `completedLast7`, `completedLast30`, and `days[].completed` count
+habit completions for the Trends card. `theme` must be one of the palette ids below; it defaults to
+`ember`. Creating a profile switches the server's active profile to it, and deleting the active
+profile switches to the first remaining one. The last profile cannot be deleted. `activeProfileId`
+tells the Habits page which tab to open first.
 
 Shop items are `{ id, name, link, cost, image, createdAt, consumable, purchasedAt, excludedProfiles }`.
 `link` and `image` must be `http://` or `https://` URLs (the image is optional), `cost` must be a

@@ -273,8 +273,11 @@ Details:
 - `GET /api/overview` is what the frontend loads. It returns
   `{ today, settings, activeProfileId, profiles[], shop }`; each profile entry is
   `{ id, name, theme, habitCount, ether, earned, spent, summary, habits }`.
-- `summary` is `{ factor, total, earned, spent, today, last7, last30, days: [{ date, ether } × 30] }`.
-  `total` is the current balance; `today`, `last7`, `last30`, and `days` count earned ether.
+- `summary` is
+  `{ factor, total, earned, spent, today, last7, last30, completedToday, completedLast7,
+  completedLast30, days: [{ date, ether, completed } × 30] }`. `total` is the current balance;
+  `today`, `last7`, `last30`, and `days[].ether` count earned ether; the `completed*` fields and
+  `days[].completed` count habit completions for the Trends card.
 - A public habit is `{ id, name, createdAt, difficulty, days, dueToday, doneToday, streak, reward,
   earnedToday }`.
 - A public shop item is
@@ -309,7 +312,7 @@ Details:
 - `load()` fetches `/api/overview` and calls:
   - `renderProfileSettings()` — profile rows on Settings, including theme pickers.
   - `renderHabits()` — the profile tab bar plus the selected profile's checklist.
-  - `renderDashboard()` — combined balances plus one `.dashboard-card` per profile.
+  - `renderDashboard()` — combined balances, the Trends card, plus one `.dashboard-card` per profile.
   - `renderShop()` — shop balance, the Consumables and Rewards sections, item cards and tiles,
     progress bars, and contributor checkboxes.
   - `renderSettings()` — ether factor field and sound pickers.
@@ -334,6 +337,10 @@ Details:
   headline number is `summary.earned` (lifetime ether earned, including ether already spent); the
   combined dashboard total is the current balance. `rangeDays()` and `rangeEther()` slice the 30-day
   summary by `dashboardRange`.
+- `trendsCard()` aggregates `summary.days[].completed` across every profile through
+  `completionDays()` and `rangeCompletions()`, then renders a shared-chrome `completionChart()`.
+  `#dashboard-trends` sits between the combined total and the profile cards and follows the same
+  range selector. Use `--chrome*` variables, not profile accents, for the Trends card.
 - The Dashboard's `#dashboard-range` select switches `dashboardRange` and re-renders without a reload.
 - `shopItemCard(item)` renders a reward as a wide card: image on the left, the name as a large link
   to the item page, and a side group holding the buy button and remove button in the same row. Then
@@ -449,6 +456,8 @@ ether = max(1, round(difficulty × factor))
 - The dashboard shows a combined balance plus one card per profile. The combined total is the current
   balance; each card's headline is lifetime ether earned (`summary.earned`), and its today and range
   values count earned ether.
+- A shared **Habit trends** card counts completions per day across every profile. It uses the same
+  weekly/monthly range selector and reserved chrome colours rather than a profile palette.
 - The dashboard card is tinted with that profile's theme and follows the page's weekly/monthly range
   selector (last 7 or last 30 days).
 

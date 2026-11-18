@@ -1076,6 +1076,35 @@ body[data-page="shop"] .page-title {
   color: var(--chrome-bright);
 }
 
+.dashboard-trends {
+  display: grid;
+}
+
+.trends-card {
+  border-color: rgba(var(--chrome-rgb), 0.28);
+  background: linear-gradient(180deg, rgba(var(--chrome-rgb), 0.08), var(--surface));
+}
+
+.trends-card .ether-title {
+  color: var(--chrome);
+}
+
+.trends-card .ether-total strong {
+  color: var(--chrome-bright);
+}
+
+.trends-chart .ether-bar {
+  background: linear-gradient(180deg, var(--chrome-bright), var(--chrome));
+}
+
+.trends-chart .ether-day.is-today .ether-bar {
+  box-shadow: 0 0 14px rgba(var(--chrome-bright-rgb), 0.35);
+}
+
+.trends-chart .ether-day.is-today .ether-day-value {
+  color: var(--chrome-bright);
+}
+
 .dashboard-card {
   gap: 14px;
 }

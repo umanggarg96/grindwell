@@ -22,6 +22,7 @@ const els = {
   etherRange: document.getElementById('ether-range'),
   etherRangeLabel: document.getElementById('ether-range-label'),
   dashboardRange: document.getElementById('dashboard-range'),
+  dashboardTrends: document.getElementById('dashboard-trends'),
   dashboardList: document.getElementById('dashboard-list'),
   shopAddToggle: document.getElementById('shop-add-toggle'),
   shopForm: document.getElementById('shop-form'),
@@ -317,6 +318,27 @@ function rangeEther(summary) {
   return dashboardRange === 'month'
     ? Number(summary.last30) || 0
     : Number(summary.last7) || 0;
+}
+
+// Every profile summary covers the same 30 days, so use one as the date axis and
+// add up each profile's completion counts for the selected range.
+function completionDays() {
+  const template = (profiles[0] && profiles[0].summary && profiles[0].summary.days) || [];
+  const slice = dashboardRange === 'month' ? template.slice(-30) : template.slice(-7);
+
+  return slice.map((day) => {
+    const completed = profiles.reduce((sum, profile) => {
+      const match = ((profile.summary && profile.summary.days) || []).find(
+        (entry) => entry.date === day.date,
+      );
+      return sum + (match ? Number(match.completed) || 0 : 0);
+    }, 0);
+    return { date: day.date, completed };
+  });
+}
+
+function rangeCompletions(days) {
+  return days.reduce((sum, day) => sum + day.completed, 0);
 }
 
 function syncDifficulty(input, output) {
@@ -992,6 +1014,89 @@ function etherChartNode(days, profileName) {
   return chart;
 }
 
+function completionChart(days) {
+  const monthly = dashboardRange === 'month';
+  const chart = document.createElement('div');
+  chart.className = 'ether-chart trends-chart' + (monthly ? ' is-month' : '');
+  chart.setAttribute('role', 'img');
+  chart.setAttribute('aria-label', `Habits completed per day over the ${rangeLabel().toLowerCase()}`);
+
+  const max = Math.max(1, ...days.map((day) => day.completed));
+  const nodes = days.map((day, index) => {
+    const [year, month, date] = day.date.split('-').map(Number);
+    const weekday = DAY_SHORT[new Date(year, month - 1, date).getDay()];
+    const showLabel = !monthly || index % 5 === 0 || index === days.length - 1;
+
+    const column = document.createElement('div');
+    column.className = 'ether-day' + (day.date === today ? ' is-today' : '');
+
+    if (!monthly) {
+      const value = document.createElement('span');
+      value.className = 'ether-day-value';
+      value.textContent = String(day.completed);
+      column.append(value);
+    }
+
+    const track = document.createElement('div');
+    track.className = 'ether-bar-track';
+
+    const bar = document.createElement('div');
+    bar.className = 'ether-bar';
+    bar.style.height = `${Math.round((day.completed / max) * 100)}%`;
+    track.append(bar);
+
+    const name = document.createElement('span');
+    name.className = 'ether-day-label';
+    name.textContent = showLabel ? (monthly ? String(date) : weekday) : '';
+
+    column.append(track, name);
+    column.title = `${day.date}: ${plural(day.completed, 'habit')} completed`;
+    return column;
+  });
+
+  chart.replaceChildren(...nodes);
+  return chart;
+}
+
+function trendsCard() {
+  const days = completionDays();
+  const total = rangeCompletions(days);
+  const todayCount = days.find((day) => day.date === today)?.completed || 0;
+  const average = days.length ? Math.round((total / days.length) * 10) / 10 : 0;
+
+  const card = document.createElement('section');
+  card.className = 'ether-card trends-card';
+  card.setAttribute('aria-labelledby', 'trends-title');
+
+  const head = document.createElement('div');
+  head.className = 'ether-head';
+
+  const left = document.createElement('div');
+
+  const title = document.createElement('p');
+  title.className = 'ether-title';
+  title.id = 'trends-title';
+  title.textContent = 'Habit trends';
+
+  const totalLine = document.createElement('p');
+  totalLine.className = 'ether-total';
+  const strong = document.createElement('strong');
+  strong.textContent = String(total);
+  const suffix = document.createElement('span');
+  suffix.textContent = total === 1 ? 'completion' : 'completions';
+  totalLine.append(strong, suffix);
+
+  left.append(title, totalLine);
+
+  const stats = document.createElement('dl');
+  stats.className = 'ether-stats';
+  stats.append(statNode('Today', todayCount), statNode('Daily average', average));
+
+  head.append(left, stats);
+  card.append(head, completionChart(days));
+  return card;
+}
+
 function dashboardCard(profile) {
   const summary = profile.summary || {
     total: profile.ether,
@@ -1053,6 +1158,7 @@ function renderDashboard() {
   els.etherRange.textContent = String(rangeTotal);
   els.dashboardRange.value = dashboardRange;
 
+  els.dashboardTrends.replaceChildren(trendsCard());
   els.dashboardList.replaceChildren(...profiles.map(dashboardCard));
 }
 
