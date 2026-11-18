@@ -1955,6 +1955,107 @@ body[data-page="jobs"] .page-title {
   outline-offset: 2px;
 }
 
+.shop-link-row {
+  display: flex;
+  gap: 8px;
+  align-items: stretch;
+  min-width: 0;
+}
+
+.shop-form-grid .shop-link-row input {
+  flex: 1 1 0;
+  width: auto;
+  min-width: 0;
+}
+
+.shop-lookup {
+  flex: none;
+  padding: 0 14px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.78rem;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.shop-lookup:hover:not(:disabled) {
+  border-color: rgba(var(--chrome-bright-rgb), 0.55);
+  color: var(--chrome-bright);
+}
+
+.shop-lookup:focus-visible {
+  outline: 2px solid rgba(var(--chrome-bright-rgb), 0.9);
+  outline-offset: 2px;
+}
+
+.shop-lookup:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.shop-lookup-status {
+  grid-column: 1 / -1;
+  margin: -2px 0 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.4;
+}
+
+.shop-lookup-status:empty {
+  display: none;
+}
+
+.shop-lookup-status[data-tone="ok"] {
+  color: var(--graph-up-bright);
+}
+
+.shop-lookup-status[data-tone="error"] {
+  color: var(--graph-down-bright);
+}
+
+.shop-helper {
+  grid-column: 1 / -1;
+  margin: -4px 0 0;
+  color: var(--muted);
+  font-size: 0.74rem;
+  line-height: 1.5;
+}
+
+.shop-helper summary {
+  width: fit-content;
+  color: var(--faint);
+  cursor: pointer;
+}
+
+.shop-helper summary:focus-visible {
+  outline: 2px solid rgba(var(--chrome-bright-rgb), 0.9);
+  outline-offset: 2px;
+}
+
+.shop-helper-note {
+  margin: 6px 0 0;
+  max-width: 46ch;
+}
+
+.shop-bookmarklet {
+  color: var(--chrome-bright);
+  font-weight: 600;
+  text-decoration: underline;
+  text-decoration-style: dotted;
+  text-underline-offset: 2px;
+  cursor: grab;
+}
+
+.shop-bookmarklet:focus-visible {
+  outline: 2px solid rgba(var(--chrome-bright-rgb), 0.9);
+  outline-offset: 2px;
+}
+
 .shop-form > button {
   justify-self: start;
   height: 38px;
@@ -3456,6 +3557,15 @@ body[data-page="jobs"] .page-title {
 
   .shop-form-grid label {
     margin-top: 4px;
+  }
+
+  .shop-link-row {
+    flex-wrap: wrap;
+  }
+
+  .shop-lookup {
+    flex: 1 1 100%;
+    height: 38px;
   }
 
   .shop-tile-body {

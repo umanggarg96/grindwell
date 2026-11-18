@@ -104,6 +104,7 @@ These conventions are intentional. Do not undo them without asking.
 | `public/styles.css` | Dark/light appearance variables, theme palettes, reserved slate chrome, layout, responsive styles. |
 | `public/habit-input.js` | UMD parser for the compact add syntax; unit-testable in Node. |
 | `public/job-math.js` | UMD job multiplier, payout, and duration helpers shared by server, browser, and tests. |
+| `public/amazon-link.js` | UMD amazon.in link parser, Creators API item shaping, and product-page reader shared by server, browser, and tests. |
 | `test/grindwell.test.mjs` | Integration suite; starts its own server on a temporary data file. |
 | `README.md` | User-facing docs. Keep it in sync with behaviour. |
 | `package.json` | `npm start` / `npm run dev` / `npm test`; no dependencies. |
@@ -137,6 +138,25 @@ Use `HOST=127.0.0.1` behind a reverse proxy. `DATA_FILE` can point anywhere:
 ```sh
 PORT=8080 HOST=127.0.0.1 DATA_FILE=./data.json npm start
 ```
+
+Shop auto-fill is optional and has two paths. With all three Amazon Creators API variables set, the
+server uses the official API:
+
+```sh
+AMAZON_CREATORS_CLIENT_ID=... AMAZON_CREATORS_CLIENT_SECRET=... AMAZON_PARTNER_TAG=yourtag-21 npm start
+```
+
+Without credentials it falls back to reading the public product page with `parseAmazonPage()`. That
+path needs no Amazon account, is rate-limited by `AMAZON_PAGE_MIN_GAP` (default 3000 ms), caches
+results for ten minutes, and can be turned off with `AMAZON_PAGE_LOOKUP=off`. `AMAZON_PAGE_URL`
+(default `https://www.amazon.in`) is the base URL for the fallback and lets tests point it at a local
+fixture.
+
+`AMAZON_MARKETPLACE` (default `www.amazon.in`), `AMAZON_CREATORS_TOKEN_URL` (default
+`https://api.amazon.co.uk/auth/o2/token`), and `AMAZON_CREATORS_API_URL` (default
+`https://creatorsapi.amazon/catalog/v1/getItems`) are overrides for tests or advanced deployments.
+Product links are always parsed as amazon.in. `lookup.mode` reports `api`, `page`, or `off`; only
+`off` makes `/api/shop/lookup` return `503`.
 
 ## Testing
 
@@ -302,7 +322,7 @@ Key rules:
 | Method | Path | Notes |
 | --- | --- | --- |
 | `GET` | `/api/health` | `{ ok, today }` |
-| `GET` | `/api/overview` | `{ today, settings, activeProfileId, profiles[] }`; each profile has `summary` and `habits` |
+| `GET` | `/api/overview` | `{ today, settings, activeProfileId, profiles[], shop, lookup }`; each profile has `summary` and `habits` |
 | `GET` | `/api/profiles` | `{ profiles[], activeProfileId }` |
 | `POST` | `/api/profiles` | `{ name, theme? }`; creates and activates |
 | `PATCH` | `/api/profiles/:id` | any of `name`, `theme` |
@@ -314,7 +334,8 @@ Key rules:
 | `DELETE` | `/api/settings/sounds/:id` | `200`; falls back if the sound was selected |
 | `POST` | `/api/settings/icons` | `{ name, url }`; adds and selects a custom icon, returns `{ icon, settings }` |
 | `DELETE` | `/api/settings/icons/:id` | `200`; falls back if the icon was selected |
-| `GET` | `/api/shop` | `{ items[], profiles[] }` |
+| `GET` | `/api/shop` | `{ items[], profiles[], lookup }` |
+| `POST` | `/api/shop/lookup` | `{ link }`; resolves an amazon.in product through the Creators API |
 | `POST` | `/api/shop/items` | `{ name, link, cost, image?, excludedProfiles? }` |
 | `PATCH` | `/api/shop/items/:id` | any of `name`, `link`, `cost`, `image`, `excludedProfiles` |
 | `DELETE` | `/api/shop/items/:id` | `204` |
@@ -335,8 +356,10 @@ Details:
 
 - Unknown `?profile=` id returns `404`.
 - `GET /api/overview` is what the frontend loads. It returns
-  `{ today, settings, activeProfileId, profiles[], shop }`; each profile entry is
+  `{ today, settings, activeProfileId, profiles[], shop, lookup }`; each profile entry is
   `{ id, name, theme, habitCount, ether, earned, penalties, spent, summary, habits }`.
+  `lookup` is `{ amazon: boolean, mode: 'api' | 'page' | 'off' }` and reports which Shop auto-fill
+  path is active.
 - `summary` is
   `{ factor, total, earned, penalties, spent, today, last7, last30, penaltyToday, penaltyLast7,
   penaltyLast30, netToday, netLast7, netLast30, completedToday, completedLast7, completedLast30,
@@ -368,6 +391,14 @@ Details:
   defaults to `false`; a non-consumable item is marked with `purchasedAt` after its first purchase
   and rejects another with `400`. Buying with too little ether returns `400`. Deleting a profile also
   removes it from every item's exclusions.
+- `POST /api/shop/lookup` resolves an amazon.in product through the Creators API when credentials
+  exist, otherwise through the product-page fallback. It returns
+  `{ item: { asin, name, cost, image, price, detailPageURL } }`; `cost` is the rounded whole-number
+  price (`null` when the page shows none) and `price` is `{ amount, currency, display }`. It returns
+  `503` only when both paths are off, `400` for links that are not amazon.in product pages, `404`
+  when the product cannot be read, and `502` with an exposed message when Amazon blocks or fails.
+  Token, API, and page requests time out after ten seconds. The access token is cached until shortly
+  before it expires, and page results are cached for ten minutes behind a minimum request gap.
 - `/dashboard`, `/jobs`, `/shop`, and `/settings` serve the same HTML document as `/`; the client
   picks the view from `window.location.pathname`. `APP_ROUTES` in `server.js` controls the clean URLs.
 - Job routes are shared, not profile-scoped except that `take` reads `?profile=<id>` (or the active
@@ -380,10 +411,11 @@ Details:
 `public/app.js` is a single vanilla script. There is no framework and no build step.
 
 - `els` caches DOM nodes.
-- State: `profiles` (from `/api/overview`), `settings`, `shop`, `jobs`, `jobLimits`, `jobActorId`,
-  `jobNow`, `today`, `activeTabId`, `editingKey`, `editDraft`, `dashboardRange` (`'week'` or
-  `'month'`, persisted in `localStorage`), `dashboardView` (`'ether'` or `'habit'`, persisted in
-  `localStorage`), and `appearance` (`'dark'` or `'light'`, persisted in `localStorage`).
+- State: `profiles` (from `/api/overview`), `settings`, `shop`, `lookup`, `jobs`, `jobLimits`,
+  `jobActorId`, `jobNow`, `today`, `activeTabId`, `editingKey`, `editDraft`, `dashboardRange`
+  (`'week'` or `'month'`, persisted in `localStorage`), `dashboardView` (`'ether'` or `'habit'`,
+  persisted in `localStorage`), and `appearance` (`'dark'` or `'light'`, persisted in
+  `localStorage`).
 - The appearance bootstrap in `public/index.html` sets `data-appearance` before paint so light mode
   does not flash dark. It reads `localStorage` first, then falls back to `prefers-color-scheme`.
 - `applyAppearance(next, { persist })` sets `data-appearance`, updates the toggle's label,
@@ -475,6 +507,19 @@ Details:
 - The shop add form starts collapsed behind `#shop-add-toggle`. `setShopFormOpen(open)` hides the
   toggle, reveals `#shop-form`, keeps `aria-expanded` in sync, and focuses the name field or the
   toggle. `Esc`, the close button, and a successful add collapse it again.
+- `public/amazon-link.js` (`AmazonLink`) provides `parseAmazonLink`, `shortItemName`,
+  `priceToCost`, `shapeAmazonItem`, `parseAmazonPage`, and `isAmazonBlockPage`.
+  `syncShopLookup()` enables the **Fetch details** button only for a valid amazon.in link when
+  `lookup.amazon` is true; `scheduleShopLookup()` debounces automatic lookup, and `lookupShopLink()`
+  posts to `/api/shop/lookup` and fills the name, cost, and image. When `lookup.mode` is `page` the
+  success message says the values were read from the page and asks the user to check the price.
+  Lookup failures leave every field editable and put the message in `#shop-lookup-status`.
+- `shopBookmarkletHref()` builds a `javascript:` bookmarklet from `window.location.origin`, so the
+  same code works on any host or port. The link is draggable, not clickable: clicking it only shows a
+  toast telling the user to drag it to the bookmarks bar. `applyShopImport()` reads
+  `/shop?add=1&link=…&name=…&cost=…&image=…`, opens the add form, fills only valid values, and then
+  calls `history.replaceState` to drop the query string. It never submits, and the server still
+  validates everything on add.
 - `themePicker(profile)` builds the four colour dots; each swatch also gets `data-theme` so its dot
   previews that palette.
 - API helpers append `?profile=<id>` via `profileQuery(profile)`.
@@ -638,6 +683,14 @@ lost = max(1, round(urgency × urgencyFactor))
 - Items remain after purchase, so repeat purchases are allowed while balances last.
 - Reset clears `spentEther` along with habits, `retiredEarnings`, and `retiredPenalties`.
 - Deleting a profile removes its id from every item's `excludedProfiles`.
+- Amazon auto-fill has two paths. Creators API credentials are exact and take priority. Without them
+  the server reads the public product page (`parseAmazonPage`), which needs no account but is
+  best-effort: prices can be missing, markup can change, and Amazon can answer with a bot check. It
+  is rate-limited, cached for ten minutes, and disabled by `AMAZON_PAGE_LOOKUP=off`.
+- Auto-fill is only a convenience. The add form always stays editable, and a lookup never creates an
+  item by itself. The bookmarklet prefill is untrusted input and must be validated on add.
+- Do not add a scraping library or a third-party product API without asking; the fallback is plain
+  `fetch` plus regex on purpose.
 
 ### Jobs
 

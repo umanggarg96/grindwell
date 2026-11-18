@@ -21,7 +21,8 @@ The app has four pages, linked from the nav bar:
 - **Dashboard** (`/dashboard`) — a combined ether balance plus a colour-coded card and chart for
   every profile, with separate **Ether trends** and **Habit trends** views, switchable between the
   last 7 days and the last 30 days.
-- **Shop** (`/shop`) — a shared list of rewards everyone can add and buy with ether.
+- **Shop** (`/shop`) — a shared list of rewards everyone can add and buy with ether, with optional
+  `amazon.in` auto-fill for the name, price, and image (no account required).
 - **Settings** (`/settings`) — the global ether reward rate, sounds, and profile management.
 
 ## Dark and light mode
@@ -159,6 +160,20 @@ The **Shop** page is shared by every profile. It starts empty. Tap **Add an item
 then enter a name, a link to where it can be bought, an ether cost, and an optional image URL. Tick
 **Consumable** if the reward can be bought more than once; leave it off for a one-time reward.
 
+When you paste an `amazon.in` product link, the form fills in the product name, current price, and
+image. The price becomes a whole-number ether cost that you can adjust, and **Fetch details** retries
+the lookup by hand. The fields stay editable, so you can always enter everything manually.
+
+There are three ways it can fill in:
+
+- **With Creators API credentials**, the server asks Amazon's official API, which is exact.
+- **Without credentials**, the server reads the public product page. That needs no account, but it is
+  best-effort: Amazon can block it, and the price is a guess you should check.
+- **The bookmarklet** reads the page your own browser already loaded. Open **Amazon page won't fill
+  in?** in the form, drag **Import Amazon item** to your bookmarks bar, then click it on any
+  `amazon.in` product page. It opens this Shop with the name, price, and image filled in. Nothing is
+  added until you press **Add item**.
+
 The Shop groups items into **Consumables** and **Rewards**. Consumables come first as compact square
 tiles in a three-column grid, with the item image or initial on top and its name, progress bar,
 contributor chips, and **Buy** button below. Rewards use the wider card layout. A reward can be
@@ -229,12 +244,32 @@ back. Other profiles and their themes are left alone.
 | `PORT`      | `3000`       | Port to listen on                                            |
 | `HOST`      | `0.0.0.0`    | Bind address. Set `127.0.0.1` when behind a reverse proxy.    |
 | `DATA_FILE` | `./data.json` | Where habit data is stored.                                  |
+| `AMAZON_CREATORS_CLIENT_ID` | — | Amazon Creators API client id, for Shop auto-fill |
+| `AMAZON_CREATORS_CLIENT_SECRET` | — | Amazon Creators API client secret |
+| `AMAZON_PARTNER_TAG` | — | Amazon Associates partner tag, for example `yourtag-21` |
+| `AMAZON_MARKETPLACE` | `www.amazon.in` | Marketplace sent to the Creators API |
+| `AMAZON_CREATORS_TOKEN_URL` | `https://api.amazon.co.uk/auth/o2/token` | OAuth token endpoint override |
+| `AMAZON_CREATORS_API_URL` | `https://creatorsapi.amazon/catalog/v1/getItems` | `GetItems` endpoint override |
+| `AMAZON_PAGE_LOOKUP` | `on` | Read the product page when no credentials are set. `off` disables it |
+| `AMAZON_PAGE_URL` | `https://www.amazon.in` | Base URL for the page fallback |
+| `AMAZON_PAGE_MIN_GAP` | `3000` | Milliseconds between page requests |
 
 Example:
 
 ```sh
 PORT=8080 HOST=127.0.0.1 DATA_FILE=/srv/grindwell/data.json npm start
 ```
+
+Shop auto-fill works without any setup by reading the public product page. That path needs no Amazon
+account, but it is best-effort: Amazon may answer with a bot check, and the markup can change. To use
+the official Creators API instead, you need an Amazon Associates account that has been accepted into
+the program and has referred qualifying sales. Create an application and credential under
+**Tools → Creators API** in Associates Central, then set all three credential variables. Credentials
+take priority over the page fallback. Set `AMAZON_PAGE_LOOKUP=off` to disable the fallback and return
+`503` when no credentials are configured.
+
+The `AMAZON_MARKETPLACE`, token, and API URL overrides are only needed for an advanced setup or a
+test endpoint; product links are always parsed as `amazon.in`.
 
 ## Your data
 
@@ -359,7 +394,7 @@ docker run -d --name grindwell -p 3000:3000 -v grindwell-data:/data grindwell
 
 | Method   | Path                       | Body                                          | Result                    |
 | -------- | -------------------------- | --------------------------------------------- | ------------------------- |
-| `GET`    | `/api/overview`            | —                                             | `{ today, settings, profiles[], shop }` |
+| `GET`    | `/api/overview`            | —                                             | `{ today, settings, profiles[], shop, lookup }` |
 | `GET`    | `/api/profiles`            | —                                             | `{ profiles[], activeProfileId }` |
 | `POST`   | `/api/profiles`            | `{ "name": "...", "theme": "blue" }`          | Created profile (becomes active) |
 | `PATCH`  | `/api/profiles/:id`        | any of `name`, `theme`                        | Updated profile           |
@@ -371,7 +406,8 @@ docker run -d --name grindwell -p 3000:3000 -v grindwell-data:/data grindwell
 | `DELETE` | `/api/settings/sounds/:id` | —                                             | Updated settings          |
 | `POST`   | `/api/settings/icons`      | `{ "name": "...", "url": "https://..." }`     | `{ icon, settings }`; selects the new icon |
 | `DELETE` | `/api/settings/icons/:id`  | —                                             | Updated settings          |
-| `GET`    | `/api/shop`                | —                                             | `{ items[], profiles[] }` |
+| `GET`    | `/api/shop`                | —                                             | `{ items[], profiles[], lookup }` |
+| `POST`   | `/api/shop/lookup`         | `{ "link": "https://www.amazon.in/dp/..." }`  | `{ item: { asin, name, cost, image, price, detailPageURL } }` |
 | `POST`   | `/api/shop/items`          | `{ "name": "...", "link": "...", "cost": 20, "image": "...", "consumable": false }` | Created item |
 | `PATCH`  | `/api/shop/items/:id`      | any of `name`, `link`, `cost`, `image`, `consumable`, `excludedProfiles` | Updated item |
 | `DELETE` | `/api/shop/items/:id`      | —                                             | `204`                     |
@@ -455,7 +491,8 @@ plus the shared `shop`:
       "habits": ["… same shape as GET /api/habits"]
     }
   ],
-  "shop": { "items": ["… same shape as GET /api/shop"] }
+  "shop": { "items": ["… same shape as GET /api/shop"] },
+  "lookup": { "amazon": true, "mode": "page" }
 }
 ```
 
@@ -479,6 +516,18 @@ item. `consumable` defaults to `false`. A one-time item gets a `purchasedAt` tim
 first purchase and rejects later purchases; consumable items stay available. Buying splits the cost
 across the included profiles that have a positive balance, proportionally to those balances, and
 returns the per-profile `contributions`.
+
+`POST /api/shop/lookup` accepts an `amazon.in` product link and returns a name, rounded whole-number
+`cost`, `image`, `price` (`amount`, `currency`, `display`), and `detailPageURL`. With Creators API
+credentials the values come from Amazon's API. Without them the server reads the public product page,
+so `cost` may be `null` when the page shows no price. It returns `503` only when the page fallback is
+disabled and no credentials exist, `400` for links that are not amazon.in product pages, `404` when
+the product cannot be read, and `502` when Amazon blocks or fails the request.
+
+`lookup` in `/api/overview` and `/api/shop` is `{ amazon, mode }`. `mode` is `api` when credentials
+are configured, `page` when only the page fallback is available, and `off` when neither is. The
+frontend enables **Fetch details** when `amazon` is `true` and words the result differently for
+`page`.
 
 Each public habit includes `urgency`, `penalty` (what missing it today would cost), `reward` (what
 completing it today would earn), and `earnedToday`. `PATCH /api/settings` changes the global

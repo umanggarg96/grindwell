@@ -409,14 +409,45 @@
               <input id="shop-name" name="name" maxlength="60" placeholder="Coffee" required />
 
               <label for="shop-link">Link</label>
-              <input
-                id="shop-link"
-                name="link"
-                type="url"
-                maxlength="500"
-                placeholder="https://example.com/item"
-                required
-              />
+              <div class="shop-link-row">
+                <input
+                  id="shop-link"
+                  name="link"
+                  type="url"
+                  maxlength="500"
+                  placeholder="https://example.com/item"
+                  required
+                />
+                <button
+                  class="shop-lookup"
+                  id="shop-lookup"
+                  type="button"
+                  aria-describedby="shop-lookup-status"
+                >
+                  Fetch details
+                </button>
+              </div>
+              <p
+                class="shop-lookup-status"
+                id="shop-lookup-status"
+                role="status"
+                aria-live="polite"
+              ></p>
+
+              <details class="shop-helper">
+                <summary>Amazon page won't fill in?</summary>
+                <p class="shop-helper-note">
+                  Drag
+                  <a
+                    class="shop-bookmarklet"
+                    id="shop-bookmarklet"
+                    href="#"
+                    draggable="true"
+                  >Import Amazon item</a>
+                  to your bookmarks bar, then click it on any amazon.in product page. It opens this
+                  Shop with the name, price, and image filled in.
+                </p>
+              </details>
 
               <label for="shop-cost">Cost</label>
               <input
@@ -582,6 +613,7 @@
 
     <script src="/habit-input.js"></script>
     <script src="/job-math.js"></script>
+    <script src="/amazon-link.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

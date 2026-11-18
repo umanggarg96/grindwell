@@ -44,6 +44,9 @@ const els = {
   shopFormClose: document.getElementById('shop-form-close'),
   shopName: document.getElementById('shop-name'),
   shopLink: document.getElementById('shop-link'),
+  shopLookup: document.getElementById('shop-lookup'),
+  shopLookupStatus: document.getElementById('shop-lookup-status'),
+  shopBookmarklet: document.getElementById('shop-bookmarklet'),
   shopCost: document.getElementById('shop-cost'),
   shopImage: document.getElementById('shop-image'),
   shopConsumable: document.getElementById('shop-consumable'),
@@ -82,6 +85,7 @@ const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Frid
 const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const parseHabitInput = window.HabitInput.parseHabitInput;
 const formatJobDuration = window.JobMath.formatDuration;
+const parseAmazonLink = window.AmazonLink.parseAmazonLink;
 // Display weeks starting on Monday; the wire format stays 0 = Sunday.
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
 // Colours live in styles.css as [data-theme="..."] blocks; keep ids in sync.
@@ -151,6 +155,9 @@ let settings = {
   icon: { id: 'flame', custom: [] },
 };
 let shop = { items: [] };
+let lookup = { amazon: false, mode: 'off' };
+const shopLookupState = { attempted: '', pending: false };
+let shopLookupTimer = null;
 let jobs = { inbox: [], inProgress: [], completed: [], failed: [] };
 let jobLimits = { maxInProgress: 3, terminalShown: 10 };
 let jobActorId = null;
@@ -1811,7 +1818,146 @@ function setShopFormOpen(open, { focus = true } = {}) {
   els.shopForm.hidden = !open;
   els.shopAddToggle.hidden = open;
   els.shopAddToggle.setAttribute('aria-expanded', String(open));
+  clearTimeout(shopLookupTimer);
+  if (open) syncShopLookup();
   if (focus) (open ? els.shopName : els.shopAddToggle).focus();
+}
+
+function setShopLookupStatus(message, tone = '') {
+  els.shopLookupStatus.textContent = message;
+  if (tone) els.shopLookupStatus.dataset.tone = tone;
+  else delete els.shopLookupStatus.dataset.tone;
+}
+
+const LOOKUP_OFF_MESSAGE = 'Amazon auto-fill is off on this server. Enter the details manually.';
+
+function syncShopLookup() {
+  const parsed = parseAmazonLink(els.shopLink.value);
+  const ready = lookup.amazon && Boolean(parsed) && !shopLookupState.pending;
+
+  els.shopLookup.disabled = !ready;
+  els.shopLookup.title = !lookup.amazon
+    ? 'Amazon auto-fill is off on this server'
+    : parsed
+      ? 'Fetch the name, price, and image from Amazon'
+      : 'Paste a full amazon.in product link';
+
+  if (!lookup.amazon && parsed) setShopLookupStatus(LOOKUP_OFF_MESSAGE);
+}
+
+function scheduleShopLookup() {
+  clearTimeout(shopLookupTimer);
+  const parsed = parseAmazonLink(els.shopLink.value);
+  if (!lookup.amazon || !parsed || shopLookupState.pending) return;
+  if (shopLookupState.attempted === parsed.asin) return;
+  shopLookupTimer = setTimeout(() => lookupShopLink({ auto: true }), 700);
+}
+
+async function lookupShopLink({ auto = false } = {}) {
+  if (shopLookupState.pending) return;
+
+  if (!lookup.amazon) {
+    setShopLookupStatus(LOOKUP_OFF_MESSAGE, 'error');
+    return;
+  }
+
+  const parsed = parseAmazonLink(els.shopLink.value);
+  if (!parsed) {
+    if (!auto) setShopLookupStatus('Paste a full amazon.in product link.', 'error');
+    return;
+  }
+
+  shopLookupState.pending = true;
+  shopLookupState.attempted = parsed.asin;
+  syncShopLookup();
+  setShopLookupStatus('Fetching details from Amazon…', 'pending');
+
+  try {
+    const result = await api('/api/shop/lookup', {
+      method: 'POST',
+      body: JSON.stringify({ link: els.shopLink.value.trim() }),
+    });
+    const item = result.item || {};
+    if (item.name) els.shopName.value = item.name;
+    if (Number.isInteger(item.cost) && item.cost >= 1) els.shopCost.value = String(item.cost);
+    if (item.image) els.shopImage.value = item.image;
+
+    const price = item.price && item.price.display;
+    if (lookup.mode === 'page') {
+      // The fallback reads the public page, so the price is a best guess.
+      setShopLookupStatus(
+        price
+          ? `Read from the Amazon page · ${price} — check it before adding.`
+          : 'Read the name and image from the Amazon page. Add the price.',
+        'ok',
+      );
+    } else {
+      setShopLookupStatus(price ? `Filled from Amazon · ${price}` : 'Filled from Amazon.', 'ok');
+    }
+  } catch (error) {
+    setShopLookupStatus(`${error.message} Enter the details manually.`, 'error');
+  } finally {
+    shopLookupState.pending = false;
+    syncShopLookup();
+  }
+}
+
+// A bookmarklet cannot know where this app is hosted, so the link is built
+// from the current origin. Dragging it to the bookmarks bar is the reliable
+// way to install it; clicking it here only explains that.
+function shopBookmarkletHref() {
+  const origin = window.location.origin;
+  const source = [
+    '(function(){',
+    "var a=document.querySelector('#ASIN'),",
+    "p=location.pathname.match(/\\/(?:dp|gp\\/product)\\/([A-Z0-9]{10})/i),",
+    "t=document.querySelector('#productTitle'),",
+    "i=document.querySelector('#landingImage'),",
+    "o=document.querySelector('.a-offscreen'),",
+    "m=o&&o.textContent.match(/[0-9][0-9,.]*/),",
+    "asin=a?a.value.trim():(p?p[1]:'');",
+    "if(!asin||asin.length!==10){alert('Open an amazon.in product page first.');return}",
+    'var u=' + JSON.stringify(origin) + "+'/shop?add=1&link='+encodeURIComponent('https://www.amazon.in/dp/'+asin);",
+    "if(t){var n=t.textContent.replace(/\\s+/g,' ').trim();if(n)u+='&name='+encodeURIComponent(n)}",
+    "if(m){var c=Math.round(Number(m[0].replace(/,/g,'')));if(c>0)u+='&cost='+c}",
+    "if(i){var g=i.getAttribute('data-old-hires')||i.getAttribute('src');if(g)u+='&image='+encodeURIComponent(g)}",
+    "window.open(u,'_blank')",
+    '})()',
+  ].join('');
+  return 'javascript:' + encodeURIComponent(source);
+}
+
+// Read the bookmarklet's query string once, fill the add form, then drop the
+// parameters so a reload does not refill it. Nothing is submitted here.
+function applyShopImport() {
+  const params = new URLSearchParams(window.location.search);
+  if (params.get('add') !== '1') return false;
+
+  const link = (params.get('link') || '').trim();
+  const parsed = parseAmazonLink(link);
+  if (!parsed) return false;
+
+  const name = (params.get('name') || '').replace(/\s+/g, ' ').trim().slice(0, 60);
+  const cost = Number(params.get('cost'));
+  const image = (params.get('image') || '').trim();
+
+  setShopFormOpen(true, { focus: false });
+  els.shopLink.value = link;
+  if (name) els.shopName.value = name;
+  if (Number.isInteger(cost) && cost >= 1 && cost <= 1000000) els.shopCost.value = String(cost);
+  if (/^https?:\/\//i.test(image) && image.length <= 500) els.shopImage.value = image;
+
+  shopLookupState.attempted = parsed.asin;
+  syncShopLookup();
+  setShopLookupStatus(
+    name
+      ? 'Imported from the Amazon page. Check the price, then add it.'
+      : 'Link imported. Add a name and cost.',
+    'ok',
+  );
+  history.replaceState({}, '', '/shop');
+  els.shopName.focus();
+  return true;
 }
 
 async function addShopItem(event) {
@@ -1846,6 +1992,9 @@ async function addShopItem(event) {
     });
     shop.items.push(created);
     els.shopForm.reset();
+    shopLookupState.attempted = '';
+    setShopLookupStatus('');
+    syncShopLookup();
     renderShop();
     setShopFormOpen(false);
     toast(`${created.name} added to the shop.`);
@@ -2659,6 +2808,10 @@ async function load({ silent = false } = {}) {
       icon: { id: 'flame', custom: [] },
     };
     shop = data.shop && Array.isArray(data.shop.items) ? data.shop : { items: [] };
+    lookup =
+      data.lookup && data.lookup.amazon === true
+        ? { amazon: true, mode: data.lookup.mode === 'api' ? 'api' : 'page' }
+        : { amazon: false, mode: 'off' };
     today = data.today;
 
     if (!profiles.some((profile) => profile.id === activeTabId)) {
@@ -2678,6 +2831,8 @@ async function load({ silent = false } = {}) {
     renderHabits();
     renderDashboard();
     renderShop();
+    syncShopLookup();
+    if (PAGE === 'shop') applyShopImport();
     if (PAGE === 'jobs') await loadJobs();
     renderSettings();
   } catch (error) {
@@ -2911,6 +3066,18 @@ els.soundForm.addEventListener('submit', addSound);
 els.shopForm.addEventListener('submit', addShopItem);
 els.shopAddToggle.addEventListener('click', () => setShopFormOpen(true));
 els.shopFormClose.addEventListener('click', () => setShopFormOpen(false));
+els.shopLookup.addEventListener('click', () => lookupShopLink());
+els.shopBookmarklet.href = shopBookmarkletHref();
+els.shopBookmarklet.addEventListener('click', (event) => {
+  event.preventDefault();
+  toast('Drag this link to your bookmarks bar, then click it on an amazon.in product page.');
+});
+els.shopLink.addEventListener('input', () => {
+  const parsed = parseAmazonLink(els.shopLink.value);
+  if (!parsed || parsed.asin !== shopLookupState.attempted) setShopLookupStatus('');
+  syncShopLookup();
+  scheduleShopLookup();
+});
 els.jobForm.addEventListener('submit', addJob);
 els.jobActor.addEventListener('change', () => selectJobActor(els.jobActor.value));
 wireJobDrop(els.jobCompletedBox, (id) => {

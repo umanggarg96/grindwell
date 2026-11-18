@@ -5,6 +5,12 @@ const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
 const { jobOutcome, jobPayout } = require('./public/job-math.js');
+const {
+  parseAmazonLink,
+  shapeAmazonItem,
+  parseAmazonPage,
+  isAmazonBlockPage,
+} = require('./public/amazon-link.js');
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -24,6 +30,44 @@ const MAX_PROFILES = 20;
 const MAX_SHOP_ITEMS = 100;
 const MAX_ITEM_COST = 1000000;
 const MAX_URL_LENGTH = 500;
+
+// Shop auto-fill prefers the official Amazon Creators API. Without
+// credentials it falls back to reading the product page directly, which needs
+// no account but is best-effort and can be switched off with
+// AMAZON_PAGE_LOOKUP=off.
+const AMAZON_CLIENT_ID = process.env.AMAZON_CREATORS_CLIENT_ID || '';
+const AMAZON_CLIENT_SECRET = process.env.AMAZON_CREATORS_CLIENT_SECRET || '';
+const AMAZON_PARTNER_TAG = process.env.AMAZON_PARTNER_TAG || '';
+const AMAZON_MARKETPLACE = process.env.AMAZON_MARKETPLACE || 'www.amazon.in';
+const AMAZON_TOKEN_URL =
+  process.env.AMAZON_CREATORS_TOKEN_URL || 'https://api.amazon.co.uk/auth/o2/token';
+const AMAZON_API_URL =
+  process.env.AMAZON_CREATORS_API_URL || 'https://creatorsapi.amazon/catalog/v1/getItems';
+const AMAZON_CONFIGURED = Boolean(AMAZON_CLIENT_ID && AMAZON_CLIENT_SECRET && AMAZON_PARTNER_TAG);
+const AMAZON_PAGE_LOOKUP = (process.env.AMAZON_PAGE_LOOKUP || 'on').toLowerCase() !== 'off';
+const AMAZON_PAGE_URL = (process.env.AMAZON_PAGE_URL || 'https://www.amazon.in').replace(/\/+$/, '');
+const AMAZON_PAGE_TIMEOUT = 10000;
+const AMAZON_PAGE_MAX_BYTES = 2 * 1024 * 1024;
+const AMAZON_PAGE_MIN_GAP = (() => {
+  const raw = Number(process.env.AMAZON_PAGE_MIN_GAP);
+  return Number.isFinite(raw) && raw >= 0 ? raw : 3000;
+})();
+const AMAZON_PAGE_CACHE_MS = 10 * 60 * 1000;
+const AMAZON_PAGE_CACHE_MAX = 50;
+const AMAZON_PAGE_USER_AGENT =
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36';
+
+// 'api' when Creators API credentials exist, 'page' for the fallback reader,
+// and 'off' when both paths are unavailable.
+function amazonLookupMode() {
+  if (AMAZON_CONFIGURED) return 'api';
+  return AMAZON_PAGE_LOOKUP ? 'page' : 'off';
+}
+
+function amazonLookupInfo() {
+  const mode = amazonLookupMode();
+  return { amazon: mode !== 'off', mode };
+}
 
 // Jobs are shared like the shop. Each profile can only hold a few at a time,
 // and only the newest finished jobs are shown on the board.
@@ -84,9 +128,11 @@ let saveChain = Promise.resolve();
 
 /* ---------- helpers ---------- */
 
-function httpError(status, message) {
+function httpError(status, message, { expose = false } = {}) {
   const error = new Error(message);
   error.status = status;
+  // 5xx messages are hidden by default so internal details never leak.
+  error.expose = expose;
   return error;
 }
 
@@ -1484,6 +1530,197 @@ function saveState() {
   return saveChain;
 }
 
+/* ---------- Amazon Creators API ---------- */
+
+let amazonToken = { value: '', expiresAt: 0 };
+
+function amazonFailure(message) {
+  return httpError(502, message, { expose: true });
+}
+
+async function amazonAccessToken() {
+  if (amazonToken.value && Date.now() < amazonToken.expiresAt) return amazonToken.value;
+
+  let res;
+  try {
+    res = await fetch(AMAZON_TOKEN_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      signal: AbortSignal.timeout(10000),
+      body: JSON.stringify({
+        grant_type: 'client_credentials',
+        client_id: AMAZON_CLIENT_ID,
+        client_secret: AMAZON_CLIENT_SECRET,
+        scope: 'creatorsapi::default',
+      }),
+    });
+  } catch {
+    throw amazonFailure('Could not reach Amazon. Check the connection and try again.');
+  }
+
+  if (!res.ok) throw amazonFailure('Amazon rejected the Creators API credentials.');
+
+  const data = await res.json().catch(() => null);
+  const token = data && typeof data.access_token === 'string' ? data.access_token : '';
+  if (!token) throw amazonFailure('Amazon did not return an access token.');
+
+  const expires = Number(data.expires_in);
+  const seconds = Number.isFinite(expires) && expires > 0 ? expires : 3600;
+  amazonToken = {
+    value: token,
+    expiresAt: Date.now() + Math.max(60, seconds - 60) * 1000,
+  };
+  return token;
+}
+
+async function amazonGetItem(asin) {
+  const token = await amazonAccessToken();
+
+  let res;
+  try {
+    res = await fetch(AMAZON_API_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${token}`,
+        'x-marketplace': AMAZON_MARKETPLACE,
+      },
+      signal: AbortSignal.timeout(10000),
+      body: JSON.stringify({
+        itemIds: [asin],
+        itemIdType: 'ASIN',
+        marketplace: AMAZON_MARKETPLACE,
+        partnerTag: AMAZON_PARTNER_TAG,
+        resources: [
+          'itemInfo.title',
+          'images.primary.large',
+          'offersV2.listings.price',
+          'offersV2.listings.isBuyBoxWinner',
+        ],
+      }),
+    });
+  } catch {
+    throw amazonFailure('Could not reach Amazon. Check the connection and try again.');
+  }
+
+  if (res.status === 401 || res.status === 403) {
+    amazonToken = { value: '', expiresAt: 0 };
+    throw amazonFailure(
+      'Amazon rejected the Creators API request. Check the credentials and partner tag.',
+    );
+  }
+  if (!res.ok) throw amazonFailure(`Amazon lookup failed (${res.status}).`);
+
+  const data = await res.json().catch(() => null);
+  return data ? shapeAmazonItem(data) : null;
+}
+
+/* ---------- Amazon product page fallback ---------- */
+
+const amazonPageCache = new Map();
+let amazonPageLastAt = 0;
+
+function rememberAmazonPage(asin, item) {
+  if (amazonPageCache.size >= AMAZON_PAGE_CACHE_MAX) {
+    amazonPageCache.delete(amazonPageCache.keys().next().value);
+  }
+  amazonPageCache.set(asin, { item, expiresAt: Date.now() + AMAZON_PAGE_CACHE_MS });
+}
+
+// Read at most AMAZON_PAGE_MAX_BYTES so a huge or endless response cannot
+// exhaust memory.
+async function readLimitedText(res, limit) {
+  if (!res.body) return '';
+  const reader = res.body.getReader();
+  const chunks = [];
+  let size = 0;
+  while (size < limit) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    size += value.length;
+  }
+  reader.cancel().catch(() => {});
+  return Buffer.concat(chunks).toString('utf8').slice(0, limit);
+}
+
+// Best-effort fallback for servers without Creators API credentials. It reads
+// the public product page, so it is slower and can be blocked by Amazon.
+async function amazonPageItem(asin) {
+  const cached = amazonPageCache.get(asin);
+  if (cached && Date.now() < cached.expiresAt) return cached.item;
+
+  // Space out requests: this path is for a personal, low-volume shop.
+  const wait = AMAZON_PAGE_MIN_GAP - (Date.now() - amazonPageLastAt);
+  if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
+  amazonPageLastAt = Date.now();
+
+  let res;
+  try {
+    res = await fetch(`${AMAZON_PAGE_URL}/dp/${asin}`, {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(AMAZON_PAGE_TIMEOUT),
+      headers: {
+        'User-Agent': AMAZON_PAGE_USER_AGENT,
+        Accept: 'text/html,application/xhtml+xml',
+        'Accept-Language': 'en-IN,en;q=0.9',
+      },
+    });
+  } catch {
+    throw amazonFailure('Could not reach Amazon. Check the connection and try again.');
+  }
+
+  if (res.status === 404) {
+    throw httpError(404, 'Amazon did not return details for that item.', { expose: true });
+  }
+  if (!res.ok) throw amazonFailure(`Amazon lookup failed (${res.status}).`);
+
+  const html = await readLimitedText(res, AMAZON_PAGE_MAX_BYTES);
+  if (isAmazonBlockPage(html)) {
+    throw amazonFailure(
+      'Amazon blocked the page request. Wait a moment and try again, or fill in the details manually.',
+    );
+  }
+
+  const item = parseAmazonPage(html);
+  if (!item) {
+    throw httpError(
+      404,
+      'Could not read that Amazon page. Fill in the details manually.',
+      { expose: true },
+    );
+  }
+
+  item.asin = asin;
+  item.detailPageURL = `${AMAZON_PAGE_URL}/dp/${asin}`;
+  rememberAmazonPage(asin, item);
+  return item;
+}
+
+async function lookupAmazonShopItem(link) {
+  const mode = amazonLookupMode();
+  if (mode === 'off') {
+    throw httpError(
+      503,
+      'Amazon auto-fill is turned off on this server. Enter the details manually.',
+      { expose: true },
+    );
+  }
+
+  const parsed = parseAmazonLink(link);
+  if (!parsed) throw httpError(400, 'Paste a full amazon.in product link.');
+
+  const item =
+    mode === 'api' ? await amazonGetItem(parsed.asin) : await amazonPageItem(parsed.asin);
+  if (!item) throw httpError(404, 'Amazon did not return details for that item.');
+
+  // Keep the response inside the same limits the add form enforces.
+  if (item.cost !== null && item.cost > MAX_ITEM_COST) item.cost = null;
+  if (item.image.length > MAX_URL_LENGTH) item.image = '';
+  if (item.name.length > MAX_NAME_LENGTH) item.name = item.name.slice(0, MAX_NAME_LENGTH);
+  return item;
+}
+
 /* ---------- HTTP plumbing ---------- */
 
 function sendJson(res, status, payload) {
@@ -1596,6 +1833,7 @@ async function handleApi(req, res, pathname, url) {
       activeProfileId: state.activeProfileId,
       profiles: state.profiles.map(overviewProfile),
       shop: publicShop(),
+      lookup: amazonLookupInfo(),
     });
   }
 
@@ -1773,7 +2011,15 @@ async function handleApi(req, res, pathname, url) {
     return sendJson(res, 200, {
       ...publicShop(),
       profiles: state.profiles.map(toPublicProfile),
+      lookup: amazonLookupInfo(),
     });
+  }
+
+  if (pathname === '/api/shop/lookup') {
+    if (req.method !== 'POST') throw httpError(405, 'Method not allowed.');
+    const body = await readJson(req);
+    const item = await lookupAmazonShopItem(body.link);
+    return sendJson(res, 200, { item });
   }
 
   if (pathname === '/api/shop/items') {
@@ -2119,7 +2365,8 @@ const server = http.createServer(async (req, res) => {
     const status = error.status || 500;
     if (status >= 500) console.error(error);
     if (!res.headersSent) {
-      sendJson(res, status, { error: status >= 500 ? 'Server error.' : error.message });
+      const message = status >= 500 && !error.expose ? 'Server error.' : error.message;
+      sendJson(res, status, { error: message });
     } else {
       res.end();
     }

@@ -4,10 +4,12 @@ Project tasks for **grindwell**. Check off completed items and add new work belo
 
 ## Inbox
 
-- Auto-fill new Shop items from `amazon.in` links: fetch the price, a short name, and the product image. Research found Amazon's official [Creators API `GetItems`](https://affiliate-program.amazon.com/creatorsapi/docs/en-us/api-reference/operations/get-items) (the successor to deprecated PA-API 5) supports title, image, and price for India (`www.amazon.in`, `INR`), but needs Associates credentials and 10 qualifying sales. Prefer the official API over brittle page scraping; keep the form editable when lookup is unavailable.
+Nothing queued right now.
 
 ## Done
 
+- [x] Fill Shop items without Amazon credentials: read the public `amazon.in` product page (rate-limited, cached, switchable off) and add a drag-to-bookmarks helper that prefills the form from the page the browser already loaded.
+- [x] Auto-fill new Shop items from `amazon.in` links with the official Amazon Creators API `GetItems` operation: fetch the title, image, and current price (rounded to ether), keep the form editable, and return a clear `503` when credentials are not configured.
 - [x] Add a shared Jobs page: post a job with an ether reward and minute ETA, claim it into a per-profile in-progress box (max three), complete it for a time-based multiplier, or let it auto-fail into a Failed box with a penalty.
 - [x] Add automatic ether penalties for missed scheduled habits: each habit has an urgency from 0 to 10, a global urgency factor lives in Settings, and the Dashboard shows net ether with negative bars.
 - [x] Add sound configuration to the Settings page for habit completion and shop purchases: include sample sounds and a way to add more sounds.

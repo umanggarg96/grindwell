@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process';
 import fs from 'node:fs/promises';
+import http from 'node:http';
 import os from 'node:os';
 import path from 'node:path';
 import { createRequire } from 'node:module';
@@ -14,6 +15,14 @@ const port = Number(process.env.TEST_PORT || 3111);
 const require = createRequire(import.meta.url);
 const { parseHabitInput } = require(path.join(root, 'public/habit-input.js'));
 const { jobOutcome, jobPayout } = require(path.join(root, 'public/job-math.js'));
+const {
+  parseAmazonLink,
+  shortItemName,
+  priceToCost,
+  shapeAmazonItem,
+  parseAmazonPage,
+  isAmazonBlockPage,
+} = require(path.join(root, 'public/amazon-link.js'));
 
 let failures = 0;
 function check(label, condition, detail = '') {
@@ -89,7 +98,17 @@ await fs.writeFile(
 );
 
 const child = spawn(process.execPath, [path.join(root, 'server.js')], {
-  env: { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_FILE: dataFile },
+  env: (() => {
+    const env = { ...process.env, PORT: String(port), HOST: '127.0.0.1', DATA_FILE: dataFile };
+    // Keep the unconfigured Amazon path deterministic even if the shell exports
+    // Creators API credentials for real use.
+    for (const key of Object.keys(env)) {
+      if (key.startsWith('AMAZON_')) delete env[key];
+    }
+    // Keep the page fallback off so the suite never requests the real Amazon.
+    env.AMAZON_PAGE_LOOKUP = 'off';
+    return env;
+  })(),
   stdio: ['ignore', 'pipe', 'pipe'],
 });
 
@@ -1651,6 +1670,122 @@ try {
     `${jsIcons} vs ${serverIcons}`,
   );
 
+  console.log('\namazon link helpers');
+
+  const amazonLink = parseAmazonLink(
+    'https://www.amazon.in/Echo-Dot-4th-Gen/dp/B08N5WRWNW/ref=sr_1_1?keywords=echo',
+  );
+  check(
+    'amazon.in product links resolve to an ASIN',
+    amazonLink && amazonLink.asin === 'B08N5WRWNW',
+    JSON.stringify(amazonLink),
+  );
+  check(
+    'amazon.in gp/product links resolve too',
+    parseAmazonLink('https://amazon.in/gp/product/B08N5WRWNW?th=1')?.asin === 'B08N5WRWNW',
+  );
+  check(
+    'non-India and non-product links are rejected',
+    parseAmazonLink('https://www.amazon.com/dp/B08N5WRWNW') === null &&
+      parseAmazonLink('https://example.com/dp/B08N5WRWNW') === null &&
+      parseAmazonLink('not a url') === null,
+  );
+  check(
+    'short names collapse whitespace and cut on a word boundary',
+    shortItemName('  Echo   Dot  (4th Gen) Smart speaker with Alexa - Charcoal  ') ===
+      'Echo Dot (4th Gen) Smart speaker with Alexa - Charcoal' &&
+      shortItemName('Echo Dot (4th Gen) Smart speaker with Alexa - Charcoal', 24) ===
+        'Echo Dot (4th Gen)…' &&
+      shortItemName('OneVeryLongWordThatCannotBreakAnywhere', 12).length === 12,
+  );
+  check(
+    'amazon prices become whole ether costs',
+    priceToCost('₹1,299.49') === 1299 &&
+      priceToCost(99.4) === 99 &&
+      priceToCost('not a price') === null &&
+      priceToCost(0) === null,
+  );
+  const shaped = shapeAmazonItem({
+    itemsResult: {
+      items: [
+        {
+          asin: 'B08N5WRWNW',
+          detailPageURL: 'https://www.amazon.in/dp/B08N5WRWNW',
+          itemInfo: { title: { displayValue: 'Echo Dot (4th Gen) Smart speaker with Alexa' } },
+          images: { primary: { medium: { url: 'https://m.media-amazon.com/images/I/echo.jpg' } } },
+          offersV2: {
+            listings: [
+              {
+                isBuyBoxWinner: false,
+                price: { money: { amount: 4499, currency: 'INR', displayAmount: '₹4,499.00' } },
+              },
+              {
+                isBuyBoxWinner: true,
+                price: { money: { amount: 3999.5, currency: 'INR', displayAmount: '₹3,999.50' } },
+              },
+            ],
+          },
+        },
+      ],
+    },
+  });
+  check(
+    'Creators API responses prefer the Buy Box price and fall back to medium images',
+    shaped &&
+      shaped.asin === 'B08N5WRWNW' &&
+      shaped.cost === 4000 &&
+      shaped.image === 'https://m.media-amazon.com/images/I/echo.jpg' &&
+      shaped.price.currency === 'INR' &&
+      shaped.price.display === '₹3,999.50',
+    JSON.stringify(shaped),
+  );
+  check(
+    'empty Creators API responses are ignored',
+    shapeAmazonItem({ itemsResult: { items: [] } }) === null &&
+      shapeAmazonItem({}) === null,
+  );
+
+  // The page fallback reads the same markup a browser renders. Amazon.in
+  // serves no Open Graph tags, so the fixture mirrors the real structure.
+  const pageHtml = `<!doctype html><html><head><title>Amazon.in</title></head><body>
+    <img src="https://m.media-amazon.com/images/I/fallback.jpg"
+      data-a-image-name="landingImage" id="landingImage"
+      data-a-dynamic-image="{&quot;https://m.media-amazon.com/images/I/dyn.jpg&quot;:[355,222]}">
+    <span id="productTitle" class="a-size-large">  Echo Dot (4th Gen) Smart
+      speaker with Alexa - Charcoal </span>
+    <div id="corePriceDisplay_desktop_feature_div">
+      <span class="a-price"><span class="a-offscreen">₹4,499.00</span></span>
+      <span class="a-price-whole">9,999</span>
+    </div>
+  </body></html>`;
+  const pageItem = parseAmazonPage(pageHtml);
+  check(
+    'product pages are read without any API credentials',
+    pageItem &&
+      pageItem.name === 'Echo Dot (4th Gen) Smart speaker with Alexa - Charcoal' &&
+      pageItem.cost === 4499 &&
+      pageItem.image === 'https://m.media-amazon.com/images/I/fallback.jpg' &&
+      pageItem.price.currency === 'INR',
+    JSON.stringify(pageItem),
+  );
+  check(
+    'a page without a title is not treated as a product',
+    parseAmazonPage('<html><body>Nothing here</body></html>') === null &&
+      parseAmazonPage('') === null,
+  );
+  check(
+    'the whole-price fallback works when no offscreen price exists',
+    parseAmazonPage(
+      '<span id="productTitle">Thing</span><span class="a-price-whole">1,299</span><span class="a-price-fraction">50</span>',
+    )?.cost === 1300,
+  );
+  check(
+    'bot checks are recognised',
+    isAmazonBlockPage('<title>Robot Check</title>') === true &&
+      isAmazonBlockPage('Enter the characters you see below') === true &&
+      isAmazonBlockPage(pageHtml) === false,
+  );
+
   console.log('\nshop');
 
   r = await call('/api/shop');
@@ -1659,8 +1794,33 @@ try {
     r.status === 200 && Array.isArray(r.body.items) && r.body.items.length === 0,
     JSON.stringify(r.body),
   );
+  check(
+    'shop reports Amazon lookup availability',
+    r.body.lookup && r.body.lookup.amazon === false && r.body.lookup.mode === 'off',
+    JSON.stringify(r.body.lookup),
+  );
   r = await call('/api/shop', { method: 'POST' });
   check('unsupported shop method is 405', r.status === 405, String(r.status));
+
+  r = await call('/api/overview');
+  check(
+    'overview reports Amazon lookup availability',
+    r.body.lookup && r.body.lookup.amazon === false && r.body.lookup.mode === 'off',
+    JSON.stringify(r.body.lookup),
+  );
+
+  r = await call('/api/shop/lookup', {
+    method: 'POST',
+    ...json({ link: 'https://www.amazon.in/dp/B08N5WRWNW' }),
+  });
+  check(
+    'disabled Amazon lookup explains how to enable it',
+    r.status === 503 && /turned off/i.test(r.body.error),
+    `${r.status} ${JSON.stringify(r.body)}`,
+  );
+
+  r = await call('/api/shop/lookup');
+  check('Amazon lookup rejects non-POST methods', r.status === 405, String(r.status));
 
   const badItems = [
     { link: 'https://example.com', cost: 5 },
@@ -1949,6 +2109,30 @@ try {
       js.includes('function setShopFormOpen') &&
       js.includes("els.shopAddToggle.addEventListener('click'") &&
       js.includes("els.shopFormClose.addEventListener('click'"),
+  );
+  check(
+    'shop link row offers Amazon auto-fill',
+    html.includes('id="shop-lookup"') &&
+      html.includes('id="shop-lookup-status"') &&
+      html.includes('src="/amazon-link.js"') &&
+      js.includes('function lookupShopLink') &&
+      js.includes('function syncShopLookup') &&
+      js.includes('function scheduleShopLookup') &&
+      js.includes("api('/api/shop/lookup'") &&
+      js.includes('els.shopLookup.addEventListener') &&
+      js.includes('els.shopLink.addEventListener') &&
+      css.includes('.shop-link-row') &&
+      css.includes('.shop-lookup-status'),
+  );
+  check(
+    'shop offers the bookmarklet fallback',
+    html.includes('id="shop-bookmarklet"') &&
+      html.includes('class="shop-helper"') &&
+      js.includes('function shopBookmarkletHref') &&
+      js.includes('function applyShopImport') &&
+      js.includes("els.shopBookmarklet.href = shopBookmarkletHref()") &&
+      js.includes("if (PAGE === 'shop') applyShopImport()") &&
+      css.includes('.shop-bookmarklet'),
   );
   check(
     'app renders and wires the shop',
@@ -2573,6 +2757,371 @@ try {
   } finally {
     failChild.kill('SIGTERM');
     await new Promise((resolve) => failChild.on('exit', resolve));
+  }
+
+  console.log('\namazon shop lookup');
+
+  let tokenRequests = 0;
+  let mockToken = null;
+  let mockItem = null;
+  const amazonMock = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', (chunk) => (body += chunk));
+    req.on('end', () => {
+      let payload = {};
+      try {
+        payload = body ? JSON.parse(body) : {};
+      } catch {
+        payload = {};
+      }
+
+      if (req.url === '/token') {
+        tokenRequests += 1;
+        mockToken = { headers: req.headers, payload };
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ access_token: 'test-token', expires_in: 3600 }));
+        return;
+      }
+
+      if (req.url === '/items') {
+        mockItem = { headers: req.headers, payload };
+        if (payload.itemIds && payload.itemIds[0] === 'B000000000') {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ errors: [{ message: 'boom' }] }));
+          return;
+        }
+        res.writeHead(200, { 'Content-Type': 'application/json' });
+        res.end(
+          JSON.stringify({
+            itemsResult: {
+              items: [
+                {
+                  asin: 'B08N5WRWNW',
+                  detailPageURL: 'https://www.amazon.in/dp/B08N5WRWNW',
+                  itemInfo: {
+                    title: {
+                      displayValue: 'Echo Dot (4th Gen) Smart speaker with Alexa - Charcoal',
+                    },
+                  },
+                  images: {
+                    primary: {
+                      medium: { url: 'https://m.media-amazon.com/images/I/echo.jpg' },
+                    },
+                  },
+                  offersV2: {
+                    listings: [
+                      {
+                        isBuyBoxWinner: false,
+                        price: {
+                          money: {
+                            amount: 4499,
+                            currency: 'INR',
+                            displayAmount: '₹4,499.00',
+                          },
+                        },
+                      },
+                      {
+                        isBuyBoxWinner: true,
+                        price: {
+                          money: {
+                            amount: 3999.5,
+                            currency: 'INR',
+                            displayAmount: '₹3,999.50',
+                          },
+                        },
+                      },
+                    ],
+                  },
+                },
+              ],
+            },
+          }),
+        );
+        return;
+      }
+
+      res.writeHead(404);
+      res.end();
+    });
+  });
+  await new Promise((resolve) => amazonMock.listen(0, '127.0.0.1', resolve));
+  const amazonMockPort = amazonMock.address().port;
+
+  const lookupPort = port + 2;
+  const lookupDataFile = path.join(tmpDir, 'amazon-lookup.json');
+  const lookupChild = spawn(process.execPath, [path.join(root, 'server.js')], {
+    env: {
+      ...process.env,
+      PORT: String(lookupPort),
+      HOST: '127.0.0.1',
+      DATA_FILE: lookupDataFile,
+      AMAZON_CREATORS_CLIENT_ID: 'test-client',
+      AMAZON_CREATORS_CLIENT_SECRET: 'test-secret',
+      AMAZON_PARTNER_TAG: 'grindwell-21',
+      AMAZON_MARKETPLACE: 'www.amazon.in',
+      AMAZON_CREATORS_TOKEN_URL: `http://127.0.0.1:${amazonMockPort}/token`,
+      AMAZON_CREATORS_API_URL: `http://127.0.0.1:${amazonMockPort}/items`,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let lookupLogs = '';
+  lookupChild.stdout.on('data', (data) => (lookupLogs += data));
+  lookupChild.stderr.on('data', (data) => (lookupLogs += data));
+
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`lookup server did not start:\n${lookupLogs}`)),
+      5000,
+    );
+    lookupChild.stdout.on('data', () => {
+      if (lookupLogs.includes('listening')) {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+  });
+
+  try {
+    const lookupBase = `http://127.0.0.1:${lookupPort}`;
+    const lookupCall = async (p, options = {}) => {
+      const res = await fetch(lookupBase + p, options);
+      const text = await res.text();
+      let body = null;
+      try {
+        body = text ? JSON.parse(text) : null;
+      } catch {
+        body = text;
+      }
+      return { status: res.status, body };
+    };
+
+    let lookupResult = await lookupCall('/api/overview');
+    check(
+      'a configured server advertises Amazon lookup',
+      lookupResult.body.lookup && lookupResult.body.lookup.amazon === true,
+      JSON.stringify(lookupResult.body.lookup),
+    );
+
+    lookupResult = await lookupCall('/api/shop/lookup', {
+      method: 'POST',
+      ...json({ link: 'https://www.amazon.in/Echo-Dot/dp/B08N5WRWNW/ref=sr_1_1' }),
+    });
+    check(
+      'Amazon lookup fills the name, cost, and image',
+      lookupResult.status === 200 &&
+        lookupResult.body.item.asin === 'B08N5WRWNW' &&
+        lookupResult.body.item.name ===
+          'Echo Dot (4th Gen) Smart speaker with Alexa - Charcoal' &&
+        lookupResult.body.item.cost === 4000 &&
+        lookupResult.body.item.image === 'https://m.media-amazon.com/images/I/echo.jpg' &&
+        lookupResult.body.item.price.currency === 'INR',
+      `${lookupResult.status} ${JSON.stringify(lookupResult.body)}`,
+    );
+    check(
+      'Amazon token request uses client credentials',
+      mockToken &&
+        mockToken.payload.grant_type === 'client_credentials' &&
+        mockToken.payload.client_id === 'test-client' &&
+        mockToken.payload.client_secret === 'test-secret' &&
+        mockToken.payload.scope === 'creatorsapi::default',
+      JSON.stringify(mockToken && mockToken.payload),
+    );
+    check(
+      'Amazon item request uses the bearer token and marketplace header',
+      mockItem &&
+        mockItem.headers.authorization === 'Bearer test-token' &&
+        mockItem.headers['x-marketplace'] === 'www.amazon.in' &&
+        mockItem.payload.itemIdType === 'ASIN' &&
+        mockItem.payload.marketplace === 'www.amazon.in' &&
+        mockItem.payload.partnerTag === 'grindwell-21' &&
+        JSON.stringify(mockItem.payload.itemIds) === JSON.stringify(['B08N5WRWNW']) &&
+        mockItem.payload.resources.includes('itemInfo.title') &&
+        mockItem.payload.resources.includes('offersV2.listings.price'),
+      JSON.stringify(mockItem && { headers: mockItem.headers, payload: mockItem.payload }),
+    );
+
+    lookupResult = await lookupCall('/api/shop/lookup', {
+      method: 'POST',
+      ...json({ link: 'https://www.amazon.in/dp/B08N5WRWNW?tag=other' }),
+    });
+    check(
+      'Amazon tokens are cached between lookups',
+      lookupResult.status === 200 && tokenRequests === 1,
+      `${lookupResult.status} / ${tokenRequests} token requests`,
+    );
+
+    lookupResult = await lookupCall('/api/shop/lookup', {
+      method: 'POST',
+      ...json({ link: 'https://example.com/dp/B08N5WRWNW' }),
+    });
+    check(
+      'Amazon lookup rejects non-Amazon links',
+      lookupResult.status === 400 && /amazon\.in/i.test(lookupResult.body.error),
+      `${lookupResult.status} ${JSON.stringify(lookupResult.body)}`,
+    );
+
+    lookupResult = await lookupCall('/api/shop/lookup', {
+      method: 'POST',
+      ...json({ link: 'https://www.amazon.in/dp/B000000000' }),
+    });
+    check(
+      'Amazon API failures are exposed to the form',
+      lookupResult.status === 502 && /lookup failed/i.test(lookupResult.body.error),
+      `${lookupResult.status} ${JSON.stringify(lookupResult.body)}`,
+    );
+  } finally {
+    lookupChild.kill('SIGTERM');
+    await new Promise((resolve) => lookupChild.on('exit', resolve));
+    await new Promise((resolve) => {
+      amazonMock.close(resolve);
+      amazonMock.closeAllConnections?.();
+    });
+  }
+
+  console.log('\namazon page fallback');
+
+  const fixturePageHtml = `<!doctype html><html><head><title>Amazon.in: Echo Dot</title></head><body>
+    <img src="https://m.media-amazon.com/images/I/echo-page.jpg" id="landingImage">
+    <span id="productTitle" class="a-size-large">Echo Dot (4th Gen) Smart speaker with Alexa - Charcoal</span>
+    <span class="a-price"><span class="a-offscreen">₹4,499.00</span></span>
+  </body></html>`;
+  let pageRequests = 0;
+  const pageMock = http.createServer((req, res) => {
+    pageRequests += 1;
+    if (req.url === '/dp/B08N5WRWNW') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end(fixturePageHtml);
+      return;
+    }
+    if (req.url === '/dp/B0BLOCKED0') {
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.end('<title>Robot Check</title><p>Enter the characters you see below</p>');
+      return;
+    }
+    res.writeHead(404, { 'Content-Type': 'text/html; charset=utf-8' });
+    res.end('<title>Page Not Found</title>');
+  });
+  await new Promise((resolve) => pageMock.listen(0, '127.0.0.1', resolve));
+  const pageMockPort = pageMock.address().port;
+
+  const pagePort = port + 3;
+  const pageDataFile = path.join(tmpDir, 'amazon-page.json');
+  const pageEnv = { ...process.env };
+  for (const key of Object.keys(pageEnv)) {
+    if (key.startsWith('AMAZON_')) delete pageEnv[key];
+  }
+  const pageChild = spawn(process.execPath, [path.join(root, 'server.js')], {
+    env: {
+      ...pageEnv,
+      PORT: String(pagePort),
+      HOST: '127.0.0.1',
+      DATA_FILE: pageDataFile,
+      AMAZON_PAGE_LOOKUP: 'on',
+      AMAZON_PAGE_URL: `http://127.0.0.1:${pageMockPort}`,
+      AMAZON_PAGE_MIN_GAP: '0',
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let pageLogs = '';
+  pageChild.stdout.on('data', (data) => (pageLogs += data));
+  pageChild.stderr.on('data', (data) => (pageLogs += data));
+
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`page lookup server did not start:\n${pageLogs}`)),
+      5000,
+    );
+    pageChild.stdout.on('data', () => {
+      if (pageLogs.includes('listening')) {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+  });
+
+  try {
+    const pageBase = `http://127.0.0.1:${pagePort}`;
+    const pageCall = async (p, options = {}) => {
+      const res = await fetch(pageBase + p, options);
+      const text = await res.text();
+      let body = null;
+      try {
+        body = text ? JSON.parse(text) : null;
+      } catch {
+        body = text;
+      }
+      return { status: res.status, body };
+    };
+
+    let pageResult = await pageCall('/api/overview');
+    check(
+      'without credentials the page reader advertises auto-fill',
+      pageResult.body.lookup &&
+        pageResult.body.lookup.amazon === true &&
+        pageResult.body.lookup.mode === 'page',
+      JSON.stringify(pageResult.body.lookup),
+    );
+
+    pageResult = await pageCall('/api/shop/lookup', {
+      method: 'POST',
+      ...json({ link: 'https://www.amazon.in/dp/B08N5WRWNW' }),
+    });
+    check(
+      'the page fallback fills the name, cost, and image',
+      pageResult.status === 200 &&
+        pageResult.body.item.name === 'Echo Dot (4th Gen) Smart speaker with Alexa - Charcoal' &&
+        pageResult.body.item.cost === 4499 &&
+        pageResult.body.item.image === 'https://m.media-amazon.com/images/I/echo-page.jpg' &&
+        pageResult.body.item.price.display === '₹4,499.00',
+      `${pageResult.status} ${JSON.stringify(pageResult.body)}`,
+    );
+
+    pageResult = await pageCall('/api/shop/lookup', {
+      method: 'POST',
+      ...json({ link: 'https://www.amazon.in/gp/product/B08N5WRWNW?th=1' }),
+    });
+    check(
+      'repeated page lookups are cached',
+      pageResult.status === 200 && pageRequests === 1,
+      `${pageResult.status} / ${pageRequests} page requests`,
+    );
+
+    pageResult = await pageCall('/api/shop/lookup', {
+      method: 'POST',
+      ...json({ link: 'https://www.amazon.in/dp/B0BLOCKED0' }),
+    });
+    check(
+      'a bot check is reported instead of filling junk',
+      pageResult.status === 502 && /blocked/i.test(pageResult.body.error),
+      `${pageResult.status} ${JSON.stringify(pageResult.body)}`,
+    );
+
+    pageResult = await pageCall('/api/shop/lookup', {
+      method: 'POST',
+      ...json({ link: 'https://www.amazon.in/dp/B000000000' }),
+    });
+    check(
+      'a missing product page is a 404',
+      pageResult.status === 404,
+      `${pageResult.status} ${JSON.stringify(pageResult.body)}`,
+    );
+
+    pageResult = await pageCall('/api/shop/lookup', {
+      method: 'POST',
+      ...json({ link: 'https://example.com/dp/B08N5WRWNW' }),
+    });
+    check(
+      'the page fallback still rejects non-Amazon links',
+      pageResult.status === 400,
+      `${pageResult.status} ${JSON.stringify(pageResult.body)}`,
+    );
+  } finally {
+    pageChild.kill('SIGTERM');
+    await new Promise((resolve) => pageChild.on('exit', resolve));
+    await new Promise((resolve) => {
+      pageMock.close(resolve);
+      pageMock.closeAllConnections?.();
+    });
   }
 
   console.log(`\n${failures === 0 ? 'all checks passed' : `${failures} check(s) failed`}`);
