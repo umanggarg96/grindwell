@@ -84,7 +84,8 @@ These conventions are intentional. Do not undo them without asking.
 - Missed scheduled days are settled server-side at startup and at the start of every non-health API
   request. There is no cron and no client-side charge; `settleAll()` walks yesterday-and-earlier
   scheduled days and records penalties before the request is handled. `settleJobs()` does the same
-  for jobs past twice their ETA, failing them and recording the penalty.
+  for jobs past twice their ETA, failing them and recording the penalty. `settleRecurringJobs()`
+  reposts recurring series and fails any occurrence still waiting in the inbox.
 - Jobs are shared like the Shop. A job moves `inbox` → `inProgress` → `completed` or `failed`, and
   payouts feed the same profile balance as habit ether.
 - The header toggle switches the whole app between dark and light. The choice lives in the browser,
@@ -298,7 +299,11 @@ Key rules:
 - `jobs` is shared. Status is one of `inbox`, `inProgress`, `completed`, or `failed`. `reward` is an
   integer 1–1000 and `etaMinutes` an integer 1–10080. `startedAt` and `dueAt` are set when a job is
   taken; `completedAt` or `failedAt` is set when it finishes. `multiplier` and `payout` are the
-  locked-in outcome, with `payout` negative for a failure.
+  locked-in outcome, with `payout` negative for a failure. `templateId` links a card to the recurring
+  series that posted it, and is `null` for a one-off job.
+- `recurring` holds shared repeat templates: `{ id, title, reward, etaMinutes, days[], createdBy,
+  createdAt, lastPostedDate }`. `days` is a non-empty list of weekdays `0`–`6`. `lastPostedDate` is
+  the last day the series posted, so a deleted inbox card is not recreated the same day.
 - `jobEarnings[date]` and `jobPenalties[date]` hold job payouts and failure penalties on the day they
   finished. They are included in `ether`, `earned`, `penalties`, and `summary`, and Reset clears them.
 - The API returns only the newest `TERMINAL_JOBS_SHOWN` (10) completed and 10 failed jobs. Older
@@ -405,6 +410,8 @@ Details:
   profile). The server enforces `MAX_JOBS_IN_PROGRESS` (3), caps stored jobs at `MAX_JOBS`, and
   rejects unknown statuses. A job past twice its ETA is failed by `settleJobs()` before the request is
   handled; completing an already-failed job returns `409`. Only `inbox` jobs can be deleted.
+  `POST /api/jobs` with a non-empty `days` array creates a series in `recurring` and posts its first
+  card; `DELETE /api/jobs/recurring/:id` stops the series and clears its waiting inbox card.
 
 ## Frontend architecture
 
@@ -510,6 +517,13 @@ Details:
   `setJobFormOpen(open)` hides the toggle, reveals `#job-form`, keeps `aria-expanded` in sync, and
   focuses the title field or the toggle. `Esc`, the close button, and a successful post collapse it
   again.
+- `#job-recurring` is the **Auto recurring** checkbox and `#job-recurring-days` holds the weekday
+  picker built by `buildJobDayPicker()`. `syncRecurringField()` reveals the picker only while the box
+  is ticked; `selectedJobDays()` reads the pressed buttons and `clearJobDays()` resets them.
+  `addJob()` sends `days` only when the box is ticked. `jobRecurringChip()` adds a `↻ Mon, Wed` chip
+  to any card with a `templateId`, and `renderJobRecurring()` fills the `#jobs-recurring-list` panel
+  under the board from `jobRecurring`. `deleteRecurring()` stops a series; `deleteJob()` explains
+  that removing a recurring card skips only that occurrence.
 - The shop add form starts collapsed behind `#shop-add-toggle`. `setShopFormOpen(open)` hides the
   toggle, reveals `#shop-form`, keeps `aria-expanded` in sync, and focuses the name field or the
   toggle. `Esc`, the close button, and a successful add collapse it again.
@@ -567,7 +581,8 @@ Details:
   `repeat(4, minmax(0, 1fr))`, dropping to two columns under 1100px and one under 720px. In-progress
   cards and legend chips carry `data-theme` so the owner dot, name, and drop highlight use that
   profile's palette. Success and failure chips use the reserved `--graph-up`/`--graph-down` colours,
-  not palette accents.
+  not palette accents. The recurring weekday picker (`.job-days`/`.job-day`) also uses `--chrome*`,
+  and the `↻` chip (`.job-chip-recurring`) is reserved chrome too.
 - The header mark and icon picker are shared chrome. Use `--chrome*` variables for selected tiles,
   focus rings, and the panel border; do not tint them with a profile palette.
 - Keep `THEMES` in `public/app.js`, the `[data-theme]` blocks in `public/styles.css`, and
@@ -717,6 +732,13 @@ lost = max(1, round(urgency × urgencyFactor))
 - Completed and failed jobs are immutable and greyed out. The API returns only the latest ten of each.
 - Only inbox jobs can be deleted. Deleting a profile returns its in-progress jobs to the inbox;
   finished jobs keep the assignee id and render as **Deleted profile**.
+- Recurring series post a fresh inbox card on each of their weekdays. A card still in the inbox when
+  the next scheduled day starts was never done, so `failMissedOccurrence()` fails it with
+  `MISSED_RECURRING_MULTIPLIER` (`-2`, twice the reward) and splits that penalty across every profile
+  with whole-number shares. A claimed occurrence that runs past twice its ETA fails normally to its
+  claimer instead.
+- Deleting a recurring card skips only that occurrence: `lastPostedDate` already covers the day, so
+  it is not recreated, and the next scheduled day posts a clean card with no reward or penalty.
 - Reset clears `jobEarnings` and `jobPenalties` with the habit ether ledgers.
 
 ### Profiles

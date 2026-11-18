@@ -81,6 +81,11 @@ const MAX_JOBS_IN_PROGRESS = 3;
 const TERMINAL_JOBS_SHOWN = 10;
 const JOB_STATUSES = ['inbox', 'inProgress', 'completed', 'failed'];
 const FAILURE_MULTIPLIER = -0.5;
+// A recurring series reposts on its weekdays. An occurrence still sitting in
+// the inbox when its next scheduled day starts was never done, so it fails at
+// twice the reward. That penalty is shared by every profile.
+const MISSED_RECURRING_MULTIPLIER = -2;
+const MAX_RECURRING_JOBS = 50;
 // Ether is a linear reward: max(1, round(difficulty * factor)). One global
 // factor keeps tuning simple; earned ether is stored per completion date.
 const DEFAULT_ETHER_FACTOR = 1;
@@ -122,6 +127,7 @@ let state = {
   profiles: [],
   shop: { items: [] },
   jobs: [],
+  recurring: [],
   activeProfileId: null,
 };
 let saveChain = Promise.resolve();
@@ -1078,6 +1084,17 @@ function findJob(id) {
   return jobsOf().find((job) => job.id === id) || null;
 }
 
+// Recurring templates live beside the jobs they post. Each template keeps the
+// last day it posted so a deleted inbox card is not recreated the same day.
+function recurringOf() {
+  if (!Array.isArray(state.recurring)) state.recurring = [];
+  return state.recurring;
+}
+
+function findRecurring(id) {
+  return recurringOf().find((entry) => entry.id === id) || null;
+}
+
 function wholeNumber(value) {
   const number =
     typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
@@ -1125,6 +1142,108 @@ function jobTimestamp(value) {
   return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
 }
 
+function parseJobDays(value) {
+  if (!Array.isArray(value)) throw httpError(400, 'Pick at least one repeat day.');
+  const days = [];
+  for (const entry of value) {
+    const day = wholeNumber(entry);
+    if (!Number.isInteger(day) || day < 0 || day > 6) {
+      throw httpError(400, 'Repeat days must be weekdays from 0 to 6.');
+    }
+    if (!days.includes(day)) days.push(day);
+  }
+  if (days.length === 0) throw httpError(400, 'Pick at least one repeat day.');
+  return days;
+}
+
+function normalizeJobDays(value) {
+  if (!Array.isArray(value)) return [];
+  const days = [];
+  for (const entry of value) {
+    const day = wholeNumber(entry);
+    if (!Number.isInteger(day) || day < 0 || day > 6) continue;
+    if (!days.includes(day)) days.push(day);
+  }
+  return days;
+}
+
+// Repairs a recurring template loaded from disk. Invalid templates are dropped
+// rather than silently reposting something the user never configured.
+function normalizeRecurring(raw, profileIds) {
+  if (!raw || typeof raw.id !== 'string' || !raw.id) return null;
+
+  const title = typeof raw.title === 'string' ? raw.title.trim().replace(/\s+/g, ' ') : '';
+  if (!title || title.length > MAX_JOB_TITLE_LENGTH) return null;
+
+  const reward = wholeNumber(raw.reward);
+  if (!Number.isInteger(reward) || reward < MIN_JOB_REWARD || reward > MAX_JOB_REWARD) {
+    return null;
+  }
+  const etaMinutes = wholeNumber(raw.etaMinutes);
+  if (
+    !Number.isInteger(etaMinutes) ||
+    etaMinutes < MIN_JOB_ETA_MINUTES ||
+    etaMinutes > MAX_JOB_ETA_MINUTES
+  ) {
+    return null;
+  }
+
+  const days = normalizeJobDays(raw.days);
+  if (days.length === 0) return null;
+
+  const createdBy =
+    typeof raw.createdBy === 'string' && profileIds.has(raw.createdBy) ? raw.createdBy : null;
+  const today = dayKey();
+  const lastPosted = dateKeyFromValue(raw.lastPostedDate);
+  // A future post date would stall the series, so clamp it to today.
+  const lastPostedDate = !lastPosted || lastPosted > today ? today : lastPosted;
+
+  return {
+    id: raw.id,
+    title,
+    reward,
+    etaMinutes,
+    days,
+    createdBy,
+    createdAt: jobTimestamp(raw.createdAt) || new Date().toISOString(),
+    lastPostedDate,
+  };
+}
+
+function toPublicRecurring(template) {
+  return {
+    id: template.id,
+    title: template.title,
+    reward: template.reward,
+    etaMinutes: template.etaMinutes,
+    days: template.days.slice(),
+    createdBy: template.createdBy,
+    createdAt: template.createdAt,
+    lastPostedDate: template.lastPostedDate,
+  };
+}
+
+// A recurring occurrence is a normal job with a link back to its template.
+function makeOccurrence(template, createdAt = new Date()) {
+  return {
+    id: crypto.randomUUID(),
+    templateId: template.id,
+    title: template.title,
+    reward: template.reward,
+    etaMinutes: template.etaMinutes,
+    status: 'inbox',
+    createdBy: template.createdBy,
+    assignedTo: null,
+    createdAt: createdAt.toISOString(),
+    startedAt: null,
+    dueAt: null,
+    completedAt: null,
+    failedAt: null,
+    multiplier: null,
+    payout: null,
+  };
+}
+
 function dueAtFrom(startedAt, etaMinutes) {
   return new Date(Date.parse(startedAt) + etaMinutes * 60000).toISOString();
 }
@@ -1153,6 +1272,8 @@ function normalizeJob(raw, profileIds) {
   const createdBy = typeof raw.createdBy === 'string' ? raw.createdBy : null;
   let assignedTo = typeof raw.assignedTo === 'string' ? raw.assignedTo : null;
   const createdAt = jobTimestamp(raw.createdAt) || new Date().toISOString();
+  const templateId =
+    typeof raw.templateId === 'string' && raw.templateId ? raw.templateId : null;
 
   let status = JOB_STATUSES.includes(raw.status) ? raw.status : 'inbox';
   let startedAt = jobTimestamp(raw.startedAt);
@@ -1196,6 +1317,7 @@ function normalizeJob(raw, profileIds) {
 
   return {
     id: raw.id,
+    templateId,
     title,
     reward,
     etaMinutes,
@@ -1215,6 +1337,7 @@ function normalizeJob(raw, profileIds) {
 function toPublicJob(job) {
   return {
     id: job.id,
+    templateId: job.templateId || null,
     title: job.title,
     reward: job.reward,
     etaMinutes: job.etaMinutes,
@@ -1269,6 +1392,7 @@ function jobBoardPayload() {
     activeProfileId: activeProfile().id,
     profiles: state.profiles.map(toPublicProfile),
     jobs: publicJobs(),
+    recurring: recurringOf().map(toPublicRecurring),
     limits: {
       maxInProgress: MAX_JOBS_IN_PROGRESS,
       terminalShown: TERMINAL_JOBS_SHOWN,
@@ -1313,6 +1437,89 @@ function settleJobs(now = Date.now()) {
     if (!jobElapsedOutcome(job, now).failed) continue;
     failJob(job, now);
     changed = true;
+  }
+  return changed;
+}
+
+function addDaysToDate(date, count) {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate() + count);
+}
+
+// Split a whole-number penalty across every profile, keeping each share whole.
+// Leftover ether goes to the earliest profiles so the parts add up exactly.
+function splitAcrossProfiles(total) {
+  const count = state.profiles.length;
+  if (count === 0 || total <= 0) return [];
+  const base = Math.floor(total / count);
+  const remainder = total - base * count;
+  return state.profiles.map((profile, index) => ({
+    profile,
+    amount: base + (index < remainder ? 1 : 0),
+  }));
+}
+
+function inboxOccurrence(templateId) {
+  return (
+    jobsOf().find((job) => job.templateId === templateId && job.status === 'inbox') || null
+  );
+}
+
+// A recurring occurrence left in the inbox on the next scheduled day counts as
+// missed. It fails at twice the reward and every profile shares the cost.
+function failMissedOccurrence(job, key, now = Date.now()) {
+  const penalty = Math.abs(jobPayout(job.reward, MISSED_RECURRING_MULTIPLIER));
+  job.status = 'failed';
+  job.failedAt = new Date(now).toISOString();
+  job.multiplier = MISSED_RECURRING_MULTIPLIER;
+  job.payout = -penalty;
+
+  for (const share of splitAcrossProfiles(penalty)) {
+    if (share.amount <= 0) continue;
+    const ledger = { ...jobPenaltiesOf(share.profile) };
+    ledger[key] = (ledger[key] || 0) + share.amount;
+    share.profile.jobPenalties = ledger;
+  }
+}
+
+// Walk every day since the series last posted. On each scheduled day a leftover
+// inbox card is failed and a fresh occurrence is posted. Deleting the inbox
+// card skips that occurrence: the day stays marked as posted, so it is not
+// recreated, and the next scheduled day simply posts a clean one.
+function settleRecurringTemplate(template, todayKey = dayKey(), now = Date.now()) {
+  if (!template.lastPostedDate) {
+    template.lastPostedDate = todayKey;
+    return true;
+  }
+  if (template.lastPostedDate >= todayKey) return false;
+
+  const end = startOfDayKey(todayKey);
+  let cursor = addDaysToDate(startOfDayKey(template.lastPostedDate), 1);
+  let changed = false;
+  let guard = 0;
+
+  while (cursor <= end && guard < SETTLE_GUARD_DAYS) {
+    const key = dayKey(cursor);
+    if (template.days.includes(cursor.getDay())) {
+      const stale = inboxOccurrence(template.id);
+      if (stale) failMissedOccurrence(stale, key, now);
+      if (jobsOf().length < MAX_JOBS) {
+        jobsOf().push(makeOccurrence(template, new Date(now)));
+      }
+      template.lastPostedDate = key;
+      changed = true;
+    }
+    cursor = addDaysToDate(cursor, 1);
+    guard += 1;
+  }
+
+  return changed;
+}
+
+function settleRecurringJobs(now = Date.now()) {
+  const todayKey = dayKey(new Date(now));
+  let changed = false;
+  for (const template of recurringOf()) {
+    if (settleRecurringTemplate(template, todayKey, now)) changed = true;
   }
   return changed;
 }
@@ -1462,11 +1669,18 @@ async function loadState() {
         .filter(Boolean);
       if (jobs.length !== rawJobs.length) changed = true;
 
+      const rawRecurring = Array.isArray(parsed.recurring) ? parsed.recurring : [];
+      const recurring = rawRecurring
+        .map((entry) => normalizeRecurring(entry, profileIds))
+        .filter(Boolean);
+      if (recurring.length !== rawRecurring.length) changed = true;
+
       state = {
         settings: { etherFactor, urgencyFactor, sounds, icon },
         profiles,
         shop: shop.shop,
         jobs,
+        recurring,
         activeProfileId,
       };
       if (changed) await saveState();
@@ -1495,6 +1709,7 @@ async function loadState() {
       profiles: [profile],
       shop: { items: [] },
       jobs,
+      recurring: [],
       activeProfileId: profile.id,
     };
     await saveState();
@@ -1509,6 +1724,7 @@ async function loadState() {
         profiles: [profile],
         shop: state.shop && Array.isArray(state.shop.items) ? state.shop : { items: [] },
         jobs: state.jobs && Array.isArray(state.jobs) ? state.jobs : [],
+        recurring: state.recurring && Array.isArray(state.recurring) ? state.recurring : [],
         activeProfileId: profile.id,
       };
       await saveState();
@@ -1823,7 +2039,8 @@ async function handleApi(req, res, pathname, url) {
   // read or write.
   const habitsChanged = settleAll();
   const jobsChanged = settleJobs();
-  if (habitsChanged || jobsChanged) await saveState();
+  const recurringChanged = settleRecurringJobs();
+  if (habitsChanged || jobsChanged || recurringChanged) await saveState();
 
   if (pathname === '/api/overview') {
     if (req.method !== 'GET') throw httpError(405, 'Method not allowed.');
@@ -2098,15 +2315,49 @@ async function handleApi(req, res, pathname, url) {
       if (jobsOf().length >= MAX_JOBS) {
         throw httpError(400, 'The job board is full. Finish or remove a job first.');
       }
+
+      const now = new Date();
+      const title = parseJobTitle(body.title);
+      const reward = parseJobReward(body.reward);
+      const etaMinutes = parseJobEta(body.etaMinutes);
+      const days =
+        body.days === undefined || body.days === null ? [] : parseJobDays(body.days);
+
+      if (days.length > 0) {
+        if (recurringOf().length >= MAX_RECURRING_JOBS) {
+          throw httpError(400, 'Too many recurring jobs. Stop one before adding another.');
+        }
+        const template = {
+          id: crypto.randomUUID(),
+          title,
+          reward,
+          etaMinutes,
+          days,
+          createdBy: activeProfile().id,
+          createdAt: now.toISOString(),
+          lastPostedDate: dayKey(now),
+        };
+        recurringOf().push(template);
+        const job = makeOccurrence(template, now);
+        jobsOf().push(job);
+        await saveState();
+        return sendJson(res, 201, {
+          job: toPublicJob(job),
+          jobs: publicJobs(),
+          recurring: recurringOf().map(toPublicRecurring),
+        });
+      }
+
       const job = {
         id: crypto.randomUUID(),
-        title: parseJobTitle(body.title),
-        reward: parseJobReward(body.reward),
-        etaMinutes: parseJobEta(body.etaMinutes),
+        templateId: null,
+        title,
+        reward,
+        etaMinutes,
         status: 'inbox',
         createdBy: activeProfile().id,
         assignedTo: null,
-        createdAt: new Date().toISOString(),
+        createdAt: now.toISOString(),
         startedAt: null,
         dueAt: null,
         completedAt: null,
@@ -2184,6 +2435,22 @@ async function handleApi(req, res, pathname, url) {
       jobs: publicJobs(),
       profiles: state.profiles.map(toPublicProfile),
     });
+  }
+
+  const recurringJobMatch = pathname.match(/^\/api\/jobs\/recurring\/([\w-]+)$/);
+  if (recurringJobMatch) {
+    if (req.method !== 'DELETE') throw httpError(405, 'Method not allowed.');
+    const template = findRecurring(recurringJobMatch[1]);
+    if (!template) throw httpError(404, 'Recurring job not found.');
+
+    state.recurring = recurringOf().filter((entry) => entry.id !== template.id);
+    // Drop the waiting occurrence too; work already in progress is left alone.
+    state.jobs = jobsOf().filter(
+      (job) => !(job.templateId === template.id && job.status === 'inbox'),
+    );
+    await saveState();
+    res.writeHead(204, { 'Cache-Control': 'no-store' });
+    return res.end();
   }
 
   const jobMatch = pathname.match(/^\/api\/jobs\/([\w-]+)$/);

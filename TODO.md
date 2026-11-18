@@ -8,6 +8,7 @@ Nothing queued right now.
 
 ## Done
 
+- [x] Auto-recurring jobs: post a job on chosen weekdays, fail any occurrence left in the inbox at twice its reward (split across profiles), allow deleting a single occurrence to skip it, and list/stop series from the Jobs page.
 - [x] Fill Shop items without Amazon credentials: read the public `amazon.in` product page (rate-limited, cached, switchable off) and add a drag-to-bookmarks helper that prefills the form from the page the browser already loaded.
 - [x] Auto-fill new Shop items from `amazon.in` links with the official Amazon Creators API `GetItems` operation: fetch the title, image, and current price (rounded to ether), keep the form editable, and return a clear `503` when credentials are not configured.
 - [x] Add a shared Jobs page: post a job with an ether reward and minute ETA, claim it into a four-column Kanban board (Inbox, In progress, Completed, Failed, max three in progress per profile), complete it for a time-based multiplier, or let it auto-fail into the Failed column with a penalty.

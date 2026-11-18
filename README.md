@@ -238,6 +238,22 @@ Job ether is part of the same balance as habit ether: it feeds the profile total
 trends, and the Shop. It is recorded in `jobEarnings` and `jobPenalties` on the day the job finishes,
 so later changes never rewrite it. **Reset** clears both ledgers along with the habit ether.
 
+### Recurring jobs
+
+Tick **Auto recurring** in the new-job form to repeat a job on chosen weekdays (the day picker only
+appears when the box is ticked). The first card posts immediately. After that, each chosen day starts
+with a fresh card in the **Inbox**.
+
+If a card from the previous scheduled day is still sitting in the **Inbox**, it was never done, so
+it moves to **Failed** and costs **twice its reward**. That penalty is split across every profile
+with whole-number shares, so the parts add up to the exact amount. An occurrence that was claimed and
+then ran past twice its ETA fails normally instead: the claimer pays the usual penalty.
+
+Removing a recurring card with **×** skips only that occurrence: the series keeps running and posts a
+fresh card on its next day, with no reward and no penalty for the skipped one. Recurring cards carry a
+**↻ Mon, Wed** chip. A **Recurring** panel under the board lists every series with its days, reward,
+and ETA; **Stop** ends the series and clears any card still waiting in the inbox.
+
 ## Resetting
 
 Each profile tab has its own **Reset** button. It deletes every habit, completion, and earned
@@ -350,6 +366,7 @@ Everything lives in `data.json` (gitignored):
   "jobs": [
     {
       "id": "7d3e...",
+      "templateId": null,
       "title": "Fix the leaking tap",
       "reward": 20,
       "etaMinutes": 60,
@@ -365,6 +382,18 @@ Everything lives in `data.json` (gitignored):
       "payout": null
     }
   ],
+  "recurring": [
+    {
+      "id": "b8f1...",
+      "title": "Water the plants",
+      "reward": 20,
+      "etaMinutes": 60,
+      "days": [1, 3, 5],
+      "createdBy": "9f12...",
+      "createdAt": "2026-11-17T08:00:00.000Z",
+      "lastPostedDate": "2026-11-17"
+    }
+  ],
   "activeProfileId": "9f12..."
 }
 ```
@@ -377,7 +406,9 @@ missed scheduled date. When a habit is deleted, its earned ether moves to the pr
 its penalties minus `spentEther`. Job payouts and failure penalties live in the profile's
 `jobEarnings` and `jobPenalties`, keyed by the day the job finished, and count toward the same
 balance. Top-level `jobs` holds the shared board; finished jobs stay there as history even though the
-API only returns the latest ten of each. Back the file up by copying it; move machines by taking it
+API only returns the latest ten of each. `recurring` holds the repeat templates; every card a series
+posts carries its `templateId`, and the template's `lastPostedDate` stops a deleted card from being
+recreated the same day. Back the file up by copying it; move machines by taking it
 with you. Older single-profile files (a top-level `habits` array) are migrated into a profile named
 **Mine** on startup, and completions from before the reward system are backfilled using the current
 factor and difficulty. Habits saved before urgency existed migrate to urgency `0`, so they never
@@ -421,11 +452,12 @@ docker run -d --name grindwell -p 3000:3000 -v grindwell-data:/data grindwell
 | `PATCH`  | `/api/shop/items/:id`      | any of `name`, `link`, `cost`, `image`, `consumable`, `excludedProfiles` | Updated item |
 | `DELETE` | `/api/shop/items/:id`      | —                                             | `204`                     |
 | `POST`   | `/api/shop/items/:id/buy`  | —                                             | `{ item, contributions[], profiles[] }` |
-| `GET`    | `/api/jobs`                | —                                             | `{ today, now, activeProfileId, profiles[], jobs, limits }` |
-| `POST`   | `/api/jobs`                | `{ "title": "...", "reward": 20, "etaMinutes": 60 }` | Created job in the inbox |
+| `GET`    | `/api/jobs`                | —                                             | `{ today, now, activeProfileId, profiles[], jobs, recurring[], limits }` |
+| `POST`   | `/api/jobs`                | `{ "title": "...", "reward": 20, "etaMinutes": 60 }`; add `"days": [1,3,5]` to recur | Created job in the inbox |
 | `POST`   | `/api/jobs/:id/take`       | —                                             | `{ job, jobs, profiles[] }`; accepts `?profile=<id>` |
 | `POST`   | `/api/jobs/:id/complete`   | —                                             | `{ job, jobs, profiles[] }` |
 | `DELETE` | `/api/jobs/:id`            | —                                             | `204`; inbox jobs only |
+| `DELETE` | `/api/jobs/recurring/:id`  | —                                             | `204`; stops the series and clears its waiting card |
 | `GET`    | `/api/habits`              | —                                             | `{ today, habits[], profile, profiles[], settings, ether }` |
 | `POST`   | `/api/habits`              | `{ "name": "...", "difficulty": 5, "urgency": 1, "days": [1,3,5] }` | Created habit     |
 | `PATCH`  | `/api/habits/:id`          | any of `name`, `difficulty`, `urgency`, `days` | Updated habit            |
@@ -437,6 +469,12 @@ docker run -d --name grindwell -p 3000:3000 -v grindwell-data:/data grindwell
 `GET /dashboard`, `GET /jobs`, `GET /shop`, and `GET /settings` serve the same single-page document
 as `/`; the client chooses which view to show from the URL. This keeps the HTML, theme handling, and profile
 data in one place without a build step.
+
+`POST /api/jobs` with a non-empty `days` array (weekdays `0`–`6`, Sunday `0`) creates a recurring
+series and posts its first card. Every scheduled day afterwards settlement posts a fresh card; a card
+still waiting in the inbox from the previous scheduled day fails at twice its reward, with that
+penalty split across every profile. Deleting an inbox card skips only that occurrence.
+`DELETE /api/jobs/recurring/:id` stops the series and clears any card still waiting.
 
 All `/api/habits` routes accept an optional `?profile=<id>` and otherwise apply to the **active
 profile**. The UI uses that query parameter so each profile tab can read and write its own habits

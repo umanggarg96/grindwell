@@ -2772,6 +2772,242 @@ try {
     await new Promise((resolve) => failChild.on('exit', resolve));
   }
 
+  console.log('\nrecurring jobs');
+
+  const recPort = port + 4;
+  const recDataFile = path.join(tmpDir, 'recurring.json');
+  const recProfiles = [
+    {
+      id: 'rec-a',
+      name: 'Rec A',
+      theme: 'ember',
+      createdAt: new Date().toISOString(),
+      habits: [],
+      retiredEarnings: {},
+      retiredPenalties: {},
+      jobEarnings: {},
+      jobPenalties: {},
+      spentEther: 0,
+    },
+    {
+      id: 'rec-b',
+      name: 'Rec B',
+      theme: 'teal',
+      createdAt: new Date().toISOString(),
+      habits: [],
+      retiredEarnings: {},
+      retiredPenalties: {},
+      jobEarnings: {},
+      jobPenalties: {},
+      spentEther: 0,
+    },
+  ];
+  await fs.writeFile(
+    recDataFile,
+    JSON.stringify({
+      settings: { etherFactor: 1, urgencyFactor: 1 },
+      profiles: recProfiles,
+      jobs: [],
+      recurring: [],
+      shop: { items: [] },
+      activeProfileId: 'rec-a',
+    }),
+  );
+
+  async function startServer(serverPort, serverDataFile) {
+    const proc = spawn(process.execPath, [path.join(root, 'server.js')], {
+      env: {
+        ...process.env,
+        PORT: String(serverPort),
+        HOST: '127.0.0.1',
+        DATA_FILE: serverDataFile,
+      },
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+    let output = '';
+    proc.stdout.on('data', (data) => (output += data));
+    proc.stderr.on('data', (data) => (output += data));
+    await new Promise((resolve, reject) => {
+      const timer = setTimeout(
+        () => reject(new Error(`recurring server did not start:\n${output}`)),
+        5000,
+      );
+      proc.stdout.on('data', () => {
+        if (output.includes('listening')) {
+          clearTimeout(timer);
+          resolve();
+        }
+      });
+    });
+    return proc;
+  }
+
+  const recCall = async (p, options = {}) => {
+    const res = await fetch(`http://127.0.0.1:${recPort}` + p, options);
+    const text = await res.text();
+    let body = null;
+    try {
+      body = text ? JSON.parse(text) : null;
+    } catch {
+      body = text;
+    }
+    return { status: res.status, body };
+  };
+
+  let recChild = await startServer(recPort, recDataFile);
+  let recTemplateId = null;
+
+  try {
+    let recResult = await recCall(
+      '/api/jobs',
+      { method: 'POST', ...json({ title: 'Water the plants', reward: 20, etaMinutes: 60, days: [todayDow] }) },
+    );
+    recTemplateId = recResult.body.recurring[0]?.id || null;
+    check(
+      'a recurring job posts its first occurrence',
+      recResult.status === 201 &&
+        recResult.body.job.templateId === recTemplateId &&
+        recResult.body.jobs.inbox.length === 1 &&
+        recResult.body.recurring.length === 1,
+      JSON.stringify(recResult.body),
+    );
+    check(
+      'the recurring template keeps its repeat days',
+      recResult.body.recurring[0]?.days?.length === 1 &&
+        recResult.body.recurring[0].days[0] === todayDow,
+      JSON.stringify(recResult.body.recurring),
+    );
+
+    recResult = await recCall(
+      '/api/jobs',
+      { method: 'POST', ...json({ title: 'No days', reward: 5, etaMinutes: 10, days: [] }) },
+    );
+    check('a recurring job needs at least one day', recResult.status === 400);
+
+    recResult = await recCall(
+      '/api/jobs',
+      { method: 'POST', ...json({ title: 'Bad day', reward: 5, etaMinutes: 10, days: [9] }) },
+    );
+    check('a recurring job rejects unknown weekdays', recResult.status === 400);
+
+    recResult = await recCall('/api/jobs');
+    const firstOccurrence = recResult.body.jobs.inbox.find(
+      (job) => job.templateId === recTemplateId,
+    );
+    check(
+      'the board reports the recurring template',
+      recResult.body.recurring.length === 1 && Boolean(firstOccurrence),
+      JSON.stringify(recResult.body),
+    );
+
+    recResult = await recCall(`/api/jobs/${firstOccurrence.id}`, { method: 'DELETE' });
+    check('a recurring occurrence can be deleted from the inbox', recResult.status === 204);
+
+    recResult = await recCall('/api/jobs');
+    check(
+      'deleting an occurrence skips it without recreating it',
+      recResult.body.jobs.inbox.length === 0 &&
+        recResult.body.recurring.length === 1,
+      JSON.stringify(recResult.body.jobs.inbox),
+    );
+  } finally {
+    recChild.kill('SIGTERM');
+    await new Promise((resolve) => recChild.on('exit', resolve));
+  }
+
+  // Seed a leftover inbox occurrence from yesterday so the next start settles a
+  // missed day: the old card fails at twice the reward and a fresh one posts.
+  const recSeeded = JSON.parse(await fs.readFile(recDataFile, 'utf8'));
+  recSeeded.recurring[0].lastPostedDate = daysAgo(1);
+  recSeeded.jobs = [
+    {
+      id: 'leftover-occurrence',
+      templateId: recSeeded.recurring[0].id,
+      title: recSeeded.recurring[0].title,
+      reward: 20,
+      etaMinutes: 60,
+      status: 'inbox',
+      createdBy: 'rec-a',
+      assignedTo: null,
+      createdAt: new Date(Date.now() - 86400000).toISOString(),
+      startedAt: null,
+      dueAt: null,
+      completedAt: null,
+      failedAt: null,
+      multiplier: null,
+      payout: null,
+    },
+  ];
+  await fs.writeFile(recDataFile, JSON.stringify(recSeeded));
+
+  recChild = await startServer(recPort, recDataFile);
+  try {
+    let recResult = await recCall('/api/jobs');
+    const missed = recResult.body.jobs.failed.find((job) => job.id === 'leftover-occurrence');
+    check(
+      'a leftover inbox card fails on its next scheduled day',
+      missed && missed.multiplier === -2 && missed.payout === -40,
+      JSON.stringify(recResult.body.jobs.failed),
+    );
+    const fresh = recResult.body.jobs.inbox.find(
+      (job) => job.templateId === recSeeded.recurring[0].id,
+    );
+    check(
+      'a fresh occurrence posts for the new day',
+      Boolean(fresh) && fresh.id !== 'leftover-occurrence',
+      JSON.stringify(recResult.body.jobs.inbox),
+    );
+
+    recResult = await recCall('/api/habits?profile=rec-a');
+    const recEtherA = recResult.body.ether;
+    recResult = await recCall('/api/habits?profile=rec-b');
+    const recEtherB = recResult.body.ether;
+    check(
+      'the missed penalty is split across profiles',
+      recEtherA.penalties === 20 && recEtherB.penalties === 20,
+      JSON.stringify({ a: recEtherA.penalties, b: recEtherB.penalties }),
+    );
+
+    const recDisk = JSON.parse(await fs.readFile(recDataFile, 'utf8'));
+    check(
+      'the recurring template and split penalty persist',
+      recDisk.recurring.length === 1 &&
+        recDisk.recurring[0].lastPostedDate === TODAY &&
+        recDisk.profiles.find((p) => p.id === 'rec-a').jobPenalties[TODAY] === 20 &&
+        recDisk.profiles.find((p) => p.id === 'rec-b').jobPenalties[TODAY] === 20,
+      JSON.stringify(recDisk.recurring),
+    );
+
+    recResult = await recCall(`/api/jobs/recurring/${recSeeded.recurring[0].id}`, {
+      method: 'DELETE',
+    });
+    check('a recurring series can be stopped', recResult.status === 204);
+
+    recResult = await recCall('/api/jobs');
+    check(
+      'stopping a series clears it and its waiting occurrence',
+      recResult.body.recurring.length === 0 && recResult.body.jobs.inbox.length === 0,
+      JSON.stringify(recResult.body),
+    );
+  } finally {
+    recChild.kill('SIGTERM');
+    await new Promise((resolve) => recChild.on('exit', resolve));
+  }
+
+  check(
+    'recurring frontend renders the toggle, days, and series list',
+    html.includes('id="job-recurring"') &&
+      html.includes('id="job-recurring-days"') &&
+      html.includes('id="jobs-recurring-list"') &&
+      js.includes('function buildJobDayPicker') &&
+      js.includes('function renderJobRecurring') &&
+      js.includes('function deleteRecurring') &&
+      js.includes('jobRecurringToggle.checked') &&
+      css.includes('.job-day') &&
+      css.includes('.jobs-recurring-row') &&
+      css.includes('.job-chip-recurring'),
+  );
+
   console.log('\namazon shop lookup');
 
   let tokenRequests = 0;

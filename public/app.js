@@ -60,6 +60,12 @@ const els = {
   jobTitle: document.getElementById('job-title'),
   jobReward: document.getElementById('job-reward'),
   jobEta: document.getElementById('job-eta'),
+  jobRecurringToggle: document.getElementById('job-recurring'),
+  jobRecurringField: document.getElementById('job-recurring-field'),
+  jobRecurringDays: document.getElementById('job-recurring-days'),
+  jobRecurringSection: document.getElementById('jobs-recurring-section'),
+  jobRecurringList: document.getElementById('jobs-recurring-list'),
+  jobRecurringCount: document.getElementById('jobs-recurring-count'),
   jobInbox: document.getElementById('jobs-inbox'),
   jobInboxEmpty: document.getElementById('jobs-inbox-empty'),
   jobInboxCount: document.getElementById('jobs-inbox-count'),
@@ -164,6 +170,7 @@ let lookup = { amazon: false, mode: 'off' };
 const shopLookupState = { attempted: '', pending: false };
 let shopLookupTimer = null;
 let jobs = { inbox: [], inProgress: [], completed: [], failed: [] };
+let jobRecurring = [];
 let jobLimits = { maxInProgress: 3, terminalShown: 10 };
 let jobActorId = null;
 let jobNow = Date.now();
@@ -2114,6 +2121,93 @@ function jobOwnerNode(profileId) {
   return owner;
 }
 
+function jobDaysLabel(days) {
+  const ordered = WEEK_ORDER.filter((day) => days.includes(day));
+  if (ordered.length === WEEK_ORDER.length) return 'Every day';
+  return ordered.map((day) => DAY_SHORT[day]).join(', ');
+}
+
+function selectedJobDays() {
+  return WEEK_ORDER.filter((day) => {
+    const button = els.jobRecurringDays.querySelector(`.job-day[data-day="${day}"]`);
+    return button && button.getAttribute('aria-pressed') === 'true';
+  });
+}
+
+function buildJobDayPicker() {
+  els.jobRecurringDays.replaceChildren(
+    ...WEEK_ORDER.map((day) => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'job-day';
+      button.dataset.day = String(day);
+      button.textContent = DAY_SHORT[day].slice(0, 2);
+      button.title = DAY_NAMES[day];
+      button.setAttribute('aria-label', DAY_NAMES[day]);
+      button.setAttribute('aria-pressed', 'false');
+      button.addEventListener('click', () => {
+        const pressed = button.getAttribute('aria-pressed') === 'true';
+        button.setAttribute('aria-pressed', String(!pressed));
+      });
+      return button;
+    }),
+  );
+}
+
+function clearJobDays() {
+  for (const button of els.jobRecurringDays.querySelectorAll('.job-day')) {
+    button.setAttribute('aria-pressed', 'false');
+  }
+}
+
+// Repeat days are only useful once the job is set to recur.
+function syncRecurringField() {
+  els.jobRecurringField.hidden = !els.jobRecurringToggle.checked;
+}
+
+function jobRecurringChip(job) {
+  if (!job.templateId) return null;
+  const template = jobRecurring.find((entry) => entry.id === job.templateId);
+  return jobChip(`↻ ${template ? jobDaysLabel(template.days) : 'Recurring'}`, 'job-chip-recurring');
+}
+
+function recurringRow(template) {
+  const row = document.createElement('li');
+  row.className = 'jobs-recurring-row';
+
+  const main = document.createElement('div');
+  main.className = 'jobs-recurring-main';
+
+  const name = document.createElement('span');
+  name.className = 'jobs-recurring-name';
+  name.textContent = template.title;
+
+  const meta = document.createElement('span');
+  meta.className = 'jobs-recurring-meta';
+  meta.textContent =
+    `${jobDaysLabel(template.days)} · ${template.reward} ether · ` +
+    `ETA ${formatJobDuration(template.etaMinutes * 60000)}`;
+
+  main.append(name, meta);
+
+  const stop = document.createElement('button');
+  stop.type = 'button';
+  stop.className = 'jobs-recurring-stop';
+  stop.textContent = 'Stop';
+  stop.title = `Stop repeating ${template.title}`;
+  stop.setAttribute('aria-label', `Stop repeating ${template.title}`);
+  stop.addEventListener('click', () => deleteRecurring(template));
+
+  row.append(main, stop);
+  return row;
+}
+
+function renderJobRecurring() {
+  els.jobRecurringSection.hidden = jobRecurring.length === 0;
+  els.jobRecurringCount.textContent = String(jobRecurring.length);
+  els.jobRecurringList.replaceChildren(...jobRecurring.map(recurringRow));
+}
+
 function jobCard(job, { draggable = false } = {}) {
   const card = document.createElement('article');
   card.className = `job-card is-${job.status}`;
@@ -2132,6 +2226,9 @@ function jobCard(job, { draggable = false } = {}) {
   reward.append(etherIcon(), document.createTextNode(` ${job.reward} ether`));
 
   meta.append(reward, jobChip(`ETA ${formatJobDuration(job.etaMinutes * 60000)}`));
+
+  const repeat = jobRecurringChip(job);
+  if (repeat) meta.append(repeat);
 
   const foot = document.createElement('div');
   foot.className = 'job-card-foot';
@@ -2178,8 +2275,16 @@ function jobCard(job, { draggable = false } = {}) {
     );
     foot.append(by, outcome);
   } else {
-    by.textContent = `By ${jobProfileName(job.assignedTo)}`;
-    const outcome = jobChip(`Failed · ${job.payout} ether`, 'job-outcome is-failure');
+    const missed = job.multiplier === -2;
+    by.textContent = job.assignedTo
+      ? `By ${jobProfileName(job.assignedTo)}`
+      : missed
+        ? 'Missed while unclaimed'
+        : 'Unclaimed';
+    const outcome = jobChip(
+      missed ? `Missed · ${job.payout} ether` : `Failed · ${job.payout} ether`,
+      'job-outcome is-failure',
+    );
     foot.append(by, outcome);
   }
 
@@ -2309,11 +2414,13 @@ function renderJobs() {
   els.jobFailedCount.textContent = String(jobs.failed.length);
 
   els.jobStatus.textContent = `Last updated ${new Date(jobNow).toLocaleTimeString()}`;
+  renderJobRecurring();
 }
 
 async function loadJobs() {
   const data = await api('/api/jobs');
   jobs = data.jobs || { inbox: [], inProgress: [], completed: [], failed: [] };
+  jobRecurring = Array.isArray(data.recurring) ? data.recurring : [];
   jobLimits = data.limits || jobLimits;
   jobNow = Date.parse(data.now) || Date.now();
 
@@ -2337,6 +2444,8 @@ async function addJob(event) {
   const title = els.jobTitle.value.trim();
   const reward = Number(els.jobReward.value);
   const etaMinutes = Number(els.jobEta.value);
+  const recurring = els.jobRecurringToggle.checked;
+  const days = recurring ? selectedJobDays() : [];
 
   if (!title) {
     toast('Give the job a title.');
@@ -2344,18 +2453,30 @@ async function addJob(event) {
     return;
   }
 
+  if (recurring && days.length === 0) {
+    toast('Pick at least one repeat day.');
+    els.jobRecurringDays.querySelector('.job-day')?.focus();
+    return;
+  }
+
+  const payload = { title, reward, etaMinutes };
+  if (recurring) payload.days = days;
+
   const submit = els.jobForm.querySelector('button[type="submit"]');
   submit.disabled = true;
   try {
     const data = await api('/api/jobs', {
       method: 'POST',
-      body: JSON.stringify({ title, reward, etaMinutes }),
+      body: JSON.stringify(payload),
     });
     jobs = data.jobs || jobs;
+    if (Array.isArray(data.recurring)) jobRecurring = data.recurring;
     els.jobForm.reset();
+    clearJobDays();
+    syncRecurringField();
     setJobFormOpen(false);
     renderJobs();
-    toast('Job posted to the inbox.');
+    toast(recurring ? 'Recurring job posted.' : 'Job posted to the inbox.');
   } catch (error) {
     toast(error.message);
   } finally {
@@ -2402,11 +2523,26 @@ async function completeJob(job) {
 }
 
 async function deleteJob(job) {
-  if (!window.confirm(`Remove "${job.title}" from the inbox?`)) return;
+  const message = job.templateId
+    ? `Remove "${job.title}" for this occurrence? The recurring job will post again on its next day.`
+    : `Remove "${job.title}" from the inbox?`;
+  if (!window.confirm(message)) return;
   try {
     await api(`/api/jobs/${job.id}`, { method: 'DELETE' });
     await loadJobs();
     toast('Job removed.');
+  } catch (error) {
+    toast(error.message);
+    await refreshJobsQuietly();
+  }
+}
+
+async function deleteRecurring(template) {
+  if (!window.confirm(`Stop repeating "${template.title}"?`)) return;
+  try {
+    await api(`/api/jobs/recurring/${template.id}`, { method: 'DELETE' });
+    await loadJobs();
+    toast('Recurring job stopped.');
   } catch (error) {
     toast(error.message);
     await refreshJobsQuietly();
@@ -3103,6 +3239,9 @@ els.shopLink.addEventListener('input', () => {
 els.jobForm.addEventListener('submit', addJob);
 els.jobAddToggle.addEventListener('click', () => setJobFormOpen(true));
 els.jobFormClose.addEventListener('click', () => setJobFormOpen(false));
+els.jobRecurringToggle.addEventListener('change', syncRecurringField);
+buildJobDayPicker();
+syncRecurringField();
 els.jobActor.addEventListener('change', () => selectJobActor(els.jobActor.value));
 wireJobDrop(els.jobProgressBox, (id) => {
   const job = jobs.inbox.find((entry) => entry.id === id);

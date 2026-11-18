@@ -1780,20 +1780,20 @@ body[data-page="jobs"] .page-title {
 }
 
 .shop-add {
-  display: grid;
-  justify-items: start;
+  display: block;
 }
 
 .shop-add-toggle {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   justify-content: center;
   gap: 8px;
-  min-height: 38px;
-  padding: 0 15px 0 10px;
-  border: 1px dashed rgba(var(--chrome-rgb), 0.45);
-  border-radius: 999px;
-  background: rgba(var(--chrome-rgb), 0.06);
+  width: 100%;
+  height: 48px;
+  padding: 0 15px;
+  border: 1px dashed rgba(var(--chrome-rgb), 0.35);
+  border-radius: var(--radius);
+  background: var(--surface);
   color: var(--chrome-bright);
   font: inherit;
   font-size: 0.82rem;
@@ -1803,12 +1803,12 @@ body[data-page="jobs"] .page-title {
 }
 
 .shop-add-toggle:hover {
-  background: rgba(var(--chrome-rgb), 0.12);
-  border-color: rgba(var(--chrome-rgb), 0.7);
+  background: rgba(var(--chrome-rgb), 0.08);
+  border-color: rgba(var(--chrome-rgb), 0.6);
 }
 
 .shop-add-toggle:focus-visible {
-  outline: 2px solid rgba(var(--chrome-bright-rgb), 0.9);
+  outline: 2px solid var(--chrome-bright);
   outline-offset: 2px;
 }
 
@@ -3329,6 +3329,79 @@ body[data-page="jobs"] .app {
   gap: 5px;
 }
 
+.jobs-form .jobs-repeat-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text);
+  font-size: 0.8rem;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+  cursor: pointer;
+}
+
+.jobs-repeat-toggle input {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  accent-color: var(--chrome-bright);
+  cursor: pointer;
+}
+
+.jobs-repeat {
+  display: grid;
+  gap: 8px;
+}
+
+.jobs-repeat[hidden] {
+  display: none;
+}
+
+.jobs-repeat-label {
+  color: var(--muted);
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+}
+
+.job-days {
+  display: flex;
+  gap: 5px;
+}
+
+.job-day {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 32px;
+  padding: 0;
+  border: 1px solid rgba(var(--chrome-rgb), 0.28);
+  border-radius: 9px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.76rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s, color 0.15s;
+}
+
+.job-day:hover {
+  border-color: rgba(var(--chrome-rgb), 0.5);
+}
+
+.job-day[aria-pressed="true"] {
+  background: rgba(var(--chrome-rgb), 0.16);
+  border-color: rgba(var(--chrome-rgb), 0.5);
+  color: var(--chrome-bright);
+}
+
+.job-day:focus-visible {
+  outline: 2px solid var(--chrome-bright);
+  outline-offset: 2px;
+}
+
 .jobs-form button {
   padding: 10px 16px;
   border: 1px solid rgba(var(--chrome-rgb), 0.38);
@@ -3464,6 +3537,12 @@ body[data-page="jobs"] .app {
 .job-chip-reward {
   border-color: rgba(var(--chrome-rgb), 0.3);
   background: rgba(var(--chrome-rgb), 0.1);
+  color: var(--chrome-bright);
+}
+
+.job-chip-recurring {
+  border-color: rgba(var(--chrome-rgb), 0.34);
+  background: rgba(var(--chrome-rgb), 0.08);
   color: var(--chrome-bright);
 }
 
@@ -3611,6 +3690,81 @@ body[data-page="jobs"] .app {
   padding: 0 2px;
   color: var(--faint);
   font-size: 0.72rem;
+}
+
+.jobs-recurring {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(var(--chrome-rgb), 0.24);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--shadow);
+}
+
+.jobs-recurring[hidden] {
+  display: none;
+}
+
+.jobs-recurring-list {
+  display: grid;
+  gap: 8px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.jobs-recurring-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-raised);
+}
+
+.jobs-recurring-main {
+  flex: 1;
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.jobs-recurring-name {
+  font-size: 0.85rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.jobs-recurring-meta {
+  color: var(--muted);
+  font-size: 0.7rem;
+}
+
+.jobs-recurring-stop {
+  flex: none;
+  padding: 5px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 0.72rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.jobs-recurring-stop:hover {
+  border-color: rgba(var(--danger-rgb), 0.45);
+  background: rgba(var(--danger-rgb), 0.08);
+  color: var(--danger-text);
+}
+
+.jobs-recurring-stop:focus-visible {
+  outline: 2px solid var(--chrome-bright);
+  outline-offset: 2px;
 }
 
 /* small screens */

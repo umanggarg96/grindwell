@@ -334,6 +334,25 @@
                 </div>
               </div>
 
+              <label class="jobs-repeat-toggle" for="job-recurring">
+                <input id="job-recurring" name="recurring" type="checkbox" />
+                <span>Auto recurring</span>
+              </label>
+
+              <div class="jobs-repeat" id="job-recurring-field" hidden>
+                <span class="jobs-repeat-label" id="jobs-repeat-label">Repeat on</span>
+                <div
+                  class="job-days"
+                  id="job-recurring-days"
+                  role="group"
+                  aria-labelledby="jobs-repeat-label"
+                ></div>
+                <p class="jobs-hint">
+                  Posts a fresh card on each chosen day. A card left in the inbox when the next
+                  day starts fails and costs twice its reward, shared by every profile.
+                </p>
+              </div>
+
               <button type="submit">Post job</button>
             </div>
           </form>
@@ -385,6 +404,14 @@
             <p class="jobs-empty" id="jobs-failed-empty">No failures.</p>
           </section>
         </div>
+
+        <section class="jobs-recurring" id="jobs-recurring-section" hidden aria-labelledby="jobs-recurring-title">
+          <div class="jobs-box-head">
+            <h3 class="jobs-box-title" id="jobs-recurring-title">Recurring</h3>
+            <span class="jobs-count" id="jobs-recurring-count">0</span>
+          </div>
+          <ul class="jobs-recurring-list" id="jobs-recurring-list"></ul>
+        </section>
 
         <p class="jobs-status" id="jobs-status" role="status" aria-live="polite"></p>
       </section>
