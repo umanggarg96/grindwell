@@ -54,14 +54,19 @@ const els = {
   shopEmpty: document.getElementById('shop-empty'),
   shopBalance: document.getElementById('shop-balance'),
   jobActor: document.getElementById('job-actor'),
+  jobAddToggle: document.getElementById('jobs-add-toggle'),
   jobForm: document.getElementById('job-form'),
+  jobFormClose: document.getElementById('job-form-close'),
   jobTitle: document.getElementById('job-title'),
   jobReward: document.getElementById('job-reward'),
   jobEta: document.getElementById('job-eta'),
   jobInbox: document.getElementById('jobs-inbox'),
   jobInboxEmpty: document.getElementById('jobs-inbox-empty'),
   jobInboxCount: document.getElementById('jobs-inbox-count'),
+  jobProgressBox: document.getElementById('jobs-progress-box'),
   jobProgress: document.getElementById('jobs-progress'),
+  jobProgressEmpty: document.getElementById('jobs-progress-empty'),
+  jobProgressLegend: document.getElementById('jobs-progress-legend'),
   jobProgressCount: document.getElementById('jobs-progress-count'),
   jobCompleted: document.getElementById('jobs-completed'),
   jobCompletedBox: document.getElementById('jobs-completed-box'),
@@ -2091,6 +2096,24 @@ function jobActionButton(label, className, onClick) {
   return button;
 }
 
+function jobOwnerNode(profileId) {
+  const profile = jobProfile(profileId);
+  const owner = document.createElement('span');
+  owner.className = 'job-owner';
+  if (profile) owner.dataset.theme = profile.theme;
+
+  const dot = document.createElement('span');
+  dot.className = 'job-owner-dot';
+  dot.setAttribute('aria-hidden', 'true');
+
+  const name = document.createElement('span');
+  name.className = 'job-owner-name';
+  name.textContent = profile ? profile.name : 'Deleted profile';
+
+  owner.append(dot, name);
+  return owner;
+}
+
 function jobCard(job, { draggable = false } = {}) {
   const card = document.createElement('article');
   card.className = `job-card is-${job.status}`;
@@ -2140,12 +2163,13 @@ function jobCard(job, { draggable = false } = {}) {
   } else if (job.status === 'inProgress') {
     const remaining = jobRemainingLabel(job);
     const overdue = Date.parse(job.dueAt) < jobNow;
-    by.textContent = `Taken by ${jobProfileName(job.assignedTo)}`;
+    const assignee = jobProfile(job.assignedTo);
+    if (assignee) card.dataset.theme = assignee.theme;
     const time = jobChip(remaining, overdue ? 'job-time is-overdue' : 'job-time');
     const actions = document.createElement('div');
     actions.className = 'job-actions';
     actions.append(jobActionButton('Complete', 'job-complete', () => completeJob(job)));
-    foot.append(by, time, actions);
+    foot.append(jobOwnerNode(job.assignedTo), time, actions);
   } else if (job.status === 'completed') {
     by.textContent = `By ${jobProfileName(job.assignedTo)} · ${jobElapsedLabel(job)}`;
     const outcome = jobChip(
@@ -2203,48 +2227,37 @@ function wireJobDrop(node, onDrop) {
   });
 }
 
-function jobProfileBox(profile) {
-  const box = document.createElement('section');
-  box.className = 'job-profile-box';
-  box.dataset.theme = profile.theme;
-  box.dataset.profile = profile.id;
+function renderJobLegend() {
+  els.jobProgressLegend.replaceChildren(
+    ...profiles.map((profile) => {
+      const chip = document.createElement('span');
+      chip.className = 'jobs-legend-chip';
+      chip.dataset.theme = profile.theme;
 
-  const own = jobs.inProgress.filter((job) => job.assignedTo === profile.id);
+      const dot = document.createElement('span');
+      dot.className = 'jobs-legend-dot';
+      dot.setAttribute('aria-hidden', 'true');
 
-  const head = document.createElement('div');
-  head.className = 'job-profile-head';
+      const name = document.createElement('span');
+      name.className = 'jobs-legend-name';
+      name.textContent = profile.name;
 
-  const dot = document.createElement('span');
-  dot.className = 'job-profile-dot';
-  dot.setAttribute('aria-hidden', 'true');
+      const count = document.createElement('span');
+      count.className = 'jobs-legend-count';
+      count.textContent = `${jobInProgressCount(profile.id)}/${jobLimits.maxInProgress}`;
 
-  const name = document.createElement('span');
-  name.className = 'job-profile-name';
-  name.textContent = profile.name;
+      chip.append(dot, name, count);
+      return chip;
+    }),
+  );
+  els.jobProgressLegend.hidden = profiles.length === 0;
+}
 
-  const count = document.createElement('span');
-  count.className = 'job-profile-count';
-  count.textContent = `${own.length}/${jobLimits.maxInProgress}`;
-
-  head.append(dot, name, count);
-
-  const list = document.createElement('div');
-  list.className = 'jobs-list';
-  list.setAttribute('role', 'list');
-  list.replaceChildren(...own.map((job) => jobCard(job, { draggable: true })));
-
-  const empty = document.createElement('p');
-  empty.className = 'jobs-empty';
-  empty.textContent = own.length === 0 ? 'Free for a job.' : '';
-  empty.hidden = own.length > 0;
-
-  wireJobDrop(box, (id) => {
-    const job = jobs.inbox.find((entry) => entry.id === id);
-    if (job) takeJob(job, profile.id);
-  });
-
-  box.append(head, list, empty);
-  return box;
+function setJobFormOpen(open, { focus = true } = {}) {
+  els.jobForm.hidden = !open;
+  els.jobAddToggle.hidden = open;
+  els.jobAddToggle.setAttribute('aria-expanded', String(open));
+  if (focus) (open ? els.jobTitle : els.jobAddToggle).focus();
 }
 
 function renderJobActor() {
@@ -2280,8 +2293,12 @@ function renderJobs() {
   els.jobInboxEmpty.hidden = jobs.inbox.length > 0;
   els.jobInboxCount.textContent = String(jobs.inbox.length);
 
-  els.jobProgress.replaceChildren(...profiles.map(jobProfileBox));
+  els.jobProgress.replaceChildren(
+    ...jobs.inProgress.map((job) => jobCard(job, { draggable: true })),
+  );
+  els.jobProgressEmpty.hidden = jobs.inProgress.length > 0;
   els.jobProgressCount.textContent = String(jobs.inProgress.length);
+  renderJobLegend();
 
   els.jobCompleted.replaceChildren(...jobs.completed.map((job) => jobCard(job)));
   els.jobCompletedEmpty.hidden = jobs.completed.length > 0;
@@ -2336,8 +2353,8 @@ async function addJob(event) {
     });
     jobs = data.jobs || jobs;
     els.jobForm.reset();
+    setJobFormOpen(false);
     renderJobs();
-    els.jobTitle.focus();
     toast('Job posted to the inbox.');
   } catch (error) {
     toast(error.message);
@@ -3036,6 +3053,11 @@ document.addEventListener('keydown', (event) => {
   if (PAGE === 'shop' && !els.shopForm.hidden) {
     event.preventDefault();
     setShopFormOpen(false);
+    return;
+  }
+  if (PAGE === 'jobs' && !els.jobForm.hidden) {
+    event.preventDefault();
+    setJobFormOpen(false);
   }
 });
 
@@ -3079,7 +3101,13 @@ els.shopLink.addEventListener('input', () => {
   scheduleShopLookup();
 });
 els.jobForm.addEventListener('submit', addJob);
+els.jobAddToggle.addEventListener('click', () => setJobFormOpen(true));
+els.jobFormClose.addEventListener('click', () => setJobFormOpen(false));
 els.jobActor.addEventListener('change', () => selectJobActor(els.jobActor.value));
+wireJobDrop(els.jobProgressBox, (id) => {
+  const job = jobs.inbox.find((entry) => entry.id === id);
+  if (job) takeJob(job);
+});
 wireJobDrop(els.jobCompletedBox, (id) => {
   const job = jobs.inProgress.find((entry) => entry.id === id);
   if (job) completeJob(job);

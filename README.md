@@ -196,14 +196,23 @@ items stay buyable; a one-time item is marked as purchased and rejects a second 
 
 ## Jobs
 
-The **Jobs** page is a shared job board. Any profile can post work, any profile can claim it, and
+The **Jobs** page is a shared Kanban board. Any profile can post work, any profile can claim it, and
 finishing on time pays ether into the claimer's balance.
 
-A job is one combined **title / description**, an **ether reward** (1–1000), and an **ETA in whole
-minutes** (1–10080, so up to one week). Posting adds it to the **Inbox**, which every profile sees.
-Select a profile in **Acting as**, then use **Take** (or drag the card onto that profile's box) to
-claim a job. Each profile can hold at most **three jobs in progress** at once; the server rejects a
-fourth. Everyone sees claims live: the board refreshes every ten seconds and after each action.
+The board has four equal columns — **Inbox**, **In progress**, **Completed**, and **Failed**. A
+full-width **+** row above the board opens the new-job form; the **×** in that form closes it, and
+`Esc` does the same. The form asks for one combined **title / description**, an **ether reward**
+(1–1000), and an **ETA in whole minutes** (1–10080, so up to one week). Posting adds the job to the
+**Inbox**, which every profile sees.
+
+Select a profile in **Acting as**, then use **Take** (or drag the card onto the **In progress**
+column) to claim a job as that profile. In-progress cards show the claimer's name and theme, and the
+column header lists each profile's `used/3` count. Each profile can hold at most **three jobs in
+progress** at once; the server rejects a fourth. Everyone sees claims live: the board refreshes every
+ten seconds and after each action.
+
+Completing a job is done with **Complete** on its card, or by dragging the card onto the **Completed**
+column.
 
 The reward depends on how much of the ETA had passed when the job was completed:
 
@@ -217,7 +226,7 @@ The reward depends on how much of the ETA had passed when the job was completed:
 
 The payout is `max(1, round(reward × multiplier))`. A job that runs past twice its ETA fails
 automatically: the server settles it at startup and before every API request, the card moves to the
-**Failed** box, and the claimer loses `max(1, round(reward × 0.5))` ether. Completing a job after it
+**Failed** column, and the claimer loses `max(1, round(reward × 0.5))` ether. Completing a job after it
 has already failed is rejected.
 
 Completed and failed jobs are greyed out and immutable. The board shows only the **latest ten** of

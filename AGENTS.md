@@ -76,7 +76,7 @@ These conventions are intentional. Do not undo them without asking.
 - Five shared pages, selected client-side from the URL:
   - `/` — **Habits**: a tab per profile with that profile's checklist.
   - `/dashboard` — **Dashboard**: Ether trends and Habit trends sub-pages, each with one themed card per profile.
-  - `/jobs` — **Jobs**: a shared job board with an inbox, one in-progress box per profile, and completed/failed history.
+  - `/jobs` — **Jobs**: a shared four-column Kanban board (Inbox, In progress, Completed, Failed) with a full-width `+` row for posting work.
   - `/shop` — **Shop**: shared reward items, contributor checkboxes, and purchases.
   - `/settings` — **Settings**: global reward and penalty rates, sounds, and profile management.
 - The server stores `activeProfileId` so a reload opens the last selected Habits tab. Habit routes
@@ -495,15 +495,21 @@ Details:
   configured id through `playSound()`: built-in presets use `playChime()` (Web Audio synthesis) and
   custom sounds use `playAudioUrl()` with a cached `HTMLAudioElement`. `addShopItem` and
   `deleteShopItem` manage items.
-- `renderJobs()` fills the five Jobs boxes. It calls `renderJobActor()` to build the **Acting as**
-  selector, renders the inbox and terminal lists with `jobCard()`, and builds one `jobProfileBox()` per
-  profile inside `#jobs-progress`, each carrying that profile's `data-theme`. `jobCard()` shows the
-  reward, ETA, poster or claimer, remaining time, and outcome chips. Inbox cards and in-progress cards
-  are draggable; `wireJobDrop()` lets a card be dropped on a profile box (take) or on the Completed
-  box (complete). `takeJob()`, `completeJob()`, `deleteJob()`, and `addJob()` post to the job API and
-  re-render from the returned board. `loadJobs()` fetches `/api/jobs`; the page polls
-  `refreshJobsQuietly()` every ten seconds while visible so claims appear live. Job multipliers,
-  payouts, and duration formatting come from `public/job-math.js` (`JobMath`).
+- `renderJobs()` fills the four Jobs columns. It calls `renderJobActor()` to build the **Acting as**
+  selector, renders the inbox, in-progress, and terminal lists with `jobCard()`, and calls
+  `renderJobLegend()` to show each profile's `used/3` in-progress count under the In progress heading.
+  In-progress cards carry their claimer's `data-theme` and use `jobOwnerNode()` for a themed dot and
+  name, so one column shows who holds each task. `jobCard()` shows the reward, ETA, poster or claimer,
+  remaining time, and outcome chips. Inbox cards and in-progress cards are draggable; `wireJobDrop()`
+  lets an inbox card be dropped on the In progress column (take as the acting profile) or an
+  in-progress card on the Completed column (complete). `takeJob()`, `completeJob()`, `deleteJob()`,
+  and `addJob()` post to the job API and re-render from the returned board. `loadJobs()` fetches
+  `/api/jobs`; the page polls `refreshJobsQuietly()` every ten seconds while visible so claims appear
+  live. Job multipliers, payouts, and duration formatting come from `public/job-math.js` (`JobMath`).
+- The Jobs add form starts collapsed behind the full-width `#jobs-add-toggle` (`+`).
+  `setJobFormOpen(open)` hides the toggle, reveals `#job-form`, keeps `aria-expanded` in sync, and
+  focuses the title field or the toggle. `Esc`, the close button, and a successful post collapse it
+  again.
 - The shop add form starts collapsed behind `#shop-add-toggle`. `setShopFormOpen(open)` hides the
   toggle, reveals `#shop-form`, keeps `aria-expanded` in sync, and focuses the name field or the
   toggle. `Esc`, the close button, and a successful add collapse it again.
@@ -556,8 +562,10 @@ Details:
   `data-theme` so the checkbox and dot use that profile's palette.
 - The Dashboard's sub-page tab bar is shared chrome: use `--chrome*` variables for its selected tab,
   border, and focus ring. The per-profile cards inside both sub-pages still use each profile's theme.
-- The Jobs page boxes, counts, form controls, and terminal history use `--chrome*` for shared chrome.
-  Each in-progress profile box carries `data-theme` so its dot, name, and drop highlight use that
+- The Jobs page columns, counts, add row, form controls, and terminal history use `--chrome*` for
+  shared chrome. The `+` row spans the full board width, and the four columns are equal at
+  `repeat(4, minmax(0, 1fr))`, dropping to two columns under 1100px and one under 720px. In-progress
+  cards and legend chips carry `data-theme` so the owner dot, name, and drop highlight use that
   profile's palette. Success and failure chips use the reserved `--graph-up`/`--graph-down` colours,
   not palette accents.
 - The header mark and icon picker are shared chrome. Use `--chrome*` variables for selected tiles,
@@ -704,8 +712,8 @@ lost = max(1, round(urgency × urgencyFactor))
   is `1.5×`, 100%–110% is `1×`, > 110% and ≤ 2× is `0.5×`, and > 2× is a failure. Payout is
   `max(1, round(reward × multiplier))`; a failure costs `max(1, round(reward × 0.5))`.
 - A job past twice its ETA fails automatically. `settleJobs()` runs at startup and before every
-  non-health API request, records `jobPenalties[date]`, and moves the card to the Failed box. Today's
-  completed job earns `jobEarnings[date]`; both ledgers feed the normal balance and dashboard.
+  non-health API request, records `jobPenalties[date]`, and moves the card to the Failed column.
+  Today's completed job earns `jobEarnings[date]`; both ledgers feed the normal balance and dashboard.
 - Completed and failed jobs are immutable and greyed out. The API returns only the latest ten of each.
 - Only inbox jobs can be deleted. Deleting a profile returns its in-progress jobs to the inbox;
   finished jobs keep the assignee id and render as **Deleted profile**.

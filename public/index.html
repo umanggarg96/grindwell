@@ -256,10 +256,43 @@
           </label>
         </header>
 
-        <div class="jobs-board">
-          <section class="jobs-box jobs-add-box" aria-labelledby="jobs-add-title">
-            <h3 class="jobs-box-title" id="jobs-add-title">Add a new job</h3>
-            <form class="jobs-form" id="job-form">
+        <div class="jobs-add">
+          <button
+            class="jobs-add-toggle"
+            id="jobs-add-toggle"
+            type="button"
+            aria-expanded="false"
+            aria-controls="job-form"
+            aria-label="Add a job"
+            title="Add a job"
+          >
+            <svg viewBox="0 0 24 24" aria-hidden="true" focusable="false">
+              <path d="M12 5v14M5 12h14" />
+            </svg>
+          </button>
+
+          <form class="jobs-form-card" id="job-form" aria-labelledby="jobs-add-title" hidden>
+            <div class="jobs-form-head">
+              <div>
+                <h3 class="jobs-box-title" id="jobs-add-title">Add a new job</h3>
+                <p class="jobs-hint">
+                  Finish before half the ETA for 2× ether, before the ETA for 1.5×, or up to 10%
+                  late for 1×. Passing twice the ETA fails the job.
+                </p>
+              </div>
+              <button
+                class="jobs-form-close"
+                id="job-form-close"
+                type="button"
+                aria-label="Close add job form"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6L6 18" />
+                </svg>
+              </button>
+            </div>
+
+            <div class="jobs-form">
               <label for="job-title">Title / description</label>
               <textarea
                 id="job-title"
@@ -302,14 +335,12 @@
               </div>
 
               <button type="submit">Post job</button>
-            </form>
-            <p class="jobs-hint">
-              Finish before half the ETA for 2× ether, before the ETA for 1.5×, or up to 10%
-              late for 1×. Passing twice the ETA fails the job.
-            </p>
-          </section>
+            </div>
+          </form>
+        </div>
 
-          <section class="jobs-box jobs-inbox-box" aria-labelledby="jobs-inbox-title">
+        <div class="jobs-board">
+          <section class="jobs-column jobs-inbox-box" aria-labelledby="jobs-inbox-title">
             <div class="jobs-box-head">
               <h3 class="jobs-box-title" id="jobs-inbox-title">Inbox</h3>
               <span class="jobs-count" id="jobs-inbox-count">0</span>
@@ -318,16 +349,22 @@
             <p class="jobs-empty" id="jobs-inbox-empty">No jobs waiting.</p>
           </section>
 
-          <section class="jobs-box jobs-progress-box" aria-labelledby="jobs-progress-title">
+          <section
+            class="jobs-column jobs-progress-box"
+            id="jobs-progress-box"
+            aria-labelledby="jobs-progress-title"
+          >
             <div class="jobs-box-head">
               <h3 class="jobs-box-title" id="jobs-progress-title">In progress</h3>
               <span class="jobs-count" id="jobs-progress-count">0</span>
             </div>
-            <div class="jobs-profiles" id="jobs-progress"></div>
+            <div class="jobs-progress-legend" id="jobs-progress-legend"></div>
+            <div class="jobs-list" id="jobs-progress" role="list"></div>
+            <p class="jobs-empty" id="jobs-progress-empty">No jobs in progress.</p>
           </section>
 
           <section
-            class="jobs-box jobs-completed-box"
+            class="jobs-column jobs-completed-box"
             id="jobs-completed-box"
             aria-labelledby="jobs-completed-title"
           >
@@ -339,7 +376,7 @@
             <p class="jobs-empty" id="jobs-completed-empty">Nothing finished yet.</p>
           </section>
 
-          <section class="jobs-box jobs-failed-box" aria-labelledby="jobs-failed-title">
+          <section class="jobs-column jobs-failed-box" aria-labelledby="jobs-failed-title">
             <div class="jobs-box-head">
               <h3 class="jobs-box-title" id="jobs-failed-title">Failed</h3>
               <span class="jobs-count" id="jobs-failed-count">0</span>

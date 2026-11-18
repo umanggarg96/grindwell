@@ -2619,10 +2619,20 @@ try {
     String(r.status),
   );
   check(
-    'jobs page has the five boxes',
-    ['page-jobs', 'job-form', 'jobs-inbox', 'jobs-progress', 'jobs-completed', 'jobs-failed'].every(
+    'jobs page has a four-column board',
+    ['page-jobs', 'jobs-inbox', 'jobs-progress-box', 'jobs-progress', 'jobs-completed', 'jobs-failed'].every(
       (id) => html.includes(`id="${id}"`),
     ),
+  );
+  check(
+    'jobs page has a full-width add toggle',
+    html.includes('id="jobs-add-toggle"') &&
+      html.includes('aria-controls="job-form"') &&
+      /<form[^>]*id="job-form"[^>]*hidden/.test(html) &&
+      html.includes('id="job-form-close"') &&
+      js.includes('function setJobFormOpen') &&
+      js.includes("els.jobAddToggle.addEventListener('click'") &&
+      js.includes("els.jobFormClose.addEventListener('click'"),
   );
   check('jobs page has an acting-as selector', html.includes('id="job-actor"'));
   check('jobs page loads the job math helper', html.includes('/job-math.js'));
@@ -2640,8 +2650,11 @@ try {
       js.includes('job-complete'),
   );
   check(
-    'jobs styling covers profile boxes and outcomes',
-    css.includes('.job-profile-box') &&
+    'jobs styling covers the board, owners, and outcomes',
+    css.includes('.jobs-board') &&
+      css.includes('repeat(4, minmax(0, 1fr))') &&
+      css.includes('.jobs-column') &&
+      css.includes('.job-owner') &&
       css.includes('.job-card.is-failed') &&
       css.includes('.job-outcome.is-success'),
   );
