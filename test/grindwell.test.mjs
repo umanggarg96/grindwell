@@ -1076,6 +1076,59 @@ try {
   });
   check('sounds restored to defaults', r.status === 200 && r.body.sounds.habit === 'chime');
 
+  console.log('\nicons');
+  r = await call('/api/settings');
+  check(
+    'settings expose icon defaults',
+    r.status === 200 &&
+      r.body.icon &&
+      r.body.icon.id === 'flame' &&
+      Array.isArray(r.body.icon.custom) &&
+      r.body.icon.custom.length === 0,
+    JSON.stringify(r.body.icon),
+  );
+
+  r = await call('/api/settings', { method: 'PATCH', ...json({ icon: { id: 'moon' } }) });
+  check(
+    'icon can be changed',
+    r.status === 200 && r.body.icon.id === 'moon',
+    JSON.stringify(r.body.icon),
+  );
+
+  r = await call('/api/settings', { method: 'PATCH', ...json({ icon: { id: 'nope' } }) });
+  check('unknown icon is rejected', r.status === 400, String(r.status));
+
+  r = await call('/api/settings/icons', {
+    method: 'POST',
+    ...json({ name: 'Avatar', url: 'https://example.com/avatar.png' }),
+  });
+  const customIconId = r.body.icon && r.body.icon.id;
+  check(
+    'custom icon can be added and selected',
+    r.status === 201 &&
+      typeof customIconId === 'string' &&
+      r.body.settings.icon.id === customIconId &&
+      r.body.settings.icon.custom.length === 1 &&
+      r.body.settings.icon.custom[0].name === 'Avatar',
+    JSON.stringify(r.body),
+  );
+
+  r = await call('/api/settings/icons', {
+    method: 'POST',
+    ...json({ name: 'Bad icon', url: 'ftp://example.com/bad.png' }),
+  });
+  check('custom icon URL must be http(s)', r.status === 400, String(r.status));
+
+  r = await call(`/api/settings/icons/${customIconId}`, { method: 'DELETE' });
+  check(
+    'removing a selected custom icon falls back to the default',
+    r.status === 200 && r.body.icon.custom.length === 0 && r.body.icon.id === 'flame',
+    JSON.stringify(r.body.icon),
+  );
+
+  r = await call('/api/settings', { method: 'PATCH', ...json({ icon: { id: 'flame' } }) });
+  check('icon restored to default', r.status === 200 && r.body.icon.id === 'flame');
+
   const etherDisk = JSON.parse(await fs.readFile(dataFile, 'utf8'));
   check('ether factor persisted to disk', etherDisk.settings.etherFactor === 1);
   check(
@@ -1084,6 +1137,13 @@ try {
       etherDisk.settings.sounds.habit === 'chime' &&
       etherDisk.settings.sounds.purchase === 'pop',
     JSON.stringify(etherDisk.settings.sounds),
+  );
+  check(
+    'icon settings persisted to disk',
+    etherDisk.settings.icon &&
+      etherDisk.settings.icon.id === 'flame' &&
+      Array.isArray(etherDisk.settings.icon.custom),
+    JSON.stringify(etherDisk.settings.icon),
   );
   const mineOnDisk = etherDisk.profiles.find((profile) => profile.id === mineId);
   check(
@@ -1246,6 +1306,63 @@ try {
   check(
     'sound styles present',
     css.includes('.sound-row') && css.includes('.sound-form') && css.includes('.sound-list'),
+  );
+
+  console.log('\napp icon wiring');
+  check(
+    'header icon opens an inline icon picker',
+    [
+      'app-icon',
+      'app-icon-art',
+      'icon-panel',
+      'icon-panel-close',
+      'icon-presets',
+      'icon-form',
+      'icon-name',
+      'icon-url',
+      'icon-custom-list',
+    ].every((id) => html.includes(`id="${id}"`)) &&
+      /<button[^>]*id="app-icon"[^>]*aria-expanded="false"[^>]*aria-controls="icon-panel"/.test(
+        html,
+      ) &&
+      /<div[^>]*id="icon-panel"[^>]*hidden/.test(html) &&
+      !html.includes('<dialog'),
+  );
+  check(
+    'app renders and saves configurable icons',
+    [
+      'ICON_PRESETS',
+      'renderAppIcon',
+      'faviconHref',
+      'renderIconPanel',
+      'setIconPanelOpen',
+      'selectIcon',
+      'addIcon',
+      'deleteIcon',
+    ].every((name) => js.includes(name)) &&
+      js.includes("api('/api/settings/icons'") &&
+      js.includes('settings.icon.custom') &&
+      js.includes('aria-expanded') &&
+      js.includes('link[rel="icon"]'),
+  );
+  check(
+    'icon picker styles present',
+    css.includes('.icon-panel') &&
+      css.includes('.icon-grid') &&
+      css.includes('.icon-tile') &&
+      css.includes('.icon-form') &&
+      css.includes('.icon-list'),
+  );
+
+  const jsIcons = [
+    ...js.matchAll(/\{\s*id: '([a-z]+)',\s*label: '[A-Za-z]+',\s*path:/g),
+  ].map((match) => match[1]);
+  const serverIconBlock = serverSource.match(/const ICON_IDS = \[([^\]]*)\]/)?.[1] || '';
+  const serverIcons = [...serverIconBlock.matchAll(/'([a-z]+)'/g)].map((match) => match[1]);
+  check(
+    'icon ids match the server allowlist',
+    JSON.stringify(jsIcons) === JSON.stringify(serverIcons),
+    `${jsIcons} vs ${serverIcons}`,
   );
 
   console.log('\nshop');

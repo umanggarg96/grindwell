@@ -43,16 +43,70 @@
     <main class="app">
       <header class="top">
         <div class="brand">
-          <span class="mark" aria-hidden="true">
-            <svg viewBox="0 0 24 24">
-              <path
-                d="M12.6 2.2c.4 3.3-1.4 4.9-2.9 6.6C8 10.7 6.4 12.6 6.4 15a5.6 5.6 0 0 0 11.2 0c0-2.3-1-4.2-2.5-5.7-.2 1.5-1 2.5-2 2.8.5-3.3-.1-6.9-1.5-9.9Z"
-              />
-            </svg>
-          </span>
+          <button
+            class="mark"
+            id="app-icon"
+            type="button"
+            aria-haspopup="true"
+            aria-expanded="false"
+            aria-controls="icon-panel"
+            aria-label="Change app icon"
+            title="Change app icon"
+          >
+            <span id="app-icon-art" aria-hidden="true">
+              <svg viewBox="0 0 24 24">
+                <path
+                  d="M12.6 2.2c.4 3.3-1.4 4.9-2.9 6.6C8 10.7 6.4 12.6 6.4 15a5.6 5.6 0 0 0 11.2 0c0-2.3-1-4.2-2.5-5.7-.2 1.5-1 2.5-2 2.8.5-3.3-.1-6.9-1.5-9.9Z"
+                />
+              </svg>
+            </span>
+          </button>
           <div>
             <h1>grindwell</h1>
             <p class="date" id="date">today</p>
+          </div>
+
+          <div class="icon-panel" id="icon-panel" hidden role="group" aria-labelledby="icon-panel-title">
+            <div class="icon-panel-head">
+              <div>
+                <h2 class="settings-title" id="icon-panel-title">App icon</h2>
+                <p class="settings-note">Pick an example or load your own image.</p>
+              </div>
+              <button
+                class="shop-form-close"
+                id="icon-panel-close"
+                type="button"
+                aria-label="Close app icon settings"
+              >
+                <svg viewBox="0 0 24 24" aria-hidden="true">
+                  <path d="M6 6l12 12M18 6L6 18" />
+                </svg>
+              </button>
+            </div>
+
+            <div class="icon-grid" id="icon-presets" role="group" aria-label="Example icons"></div>
+
+            <form class="icon-form" id="icon-form">
+              <h3 class="sound-form-title">Load an icon</h3>
+              <p class="settings-note">Use a direct http(s) link to a square image.</p>
+              <div class="icon-form-grid">
+                <label for="icon-name">Name</label>
+                <input id="icon-name" name="name" maxlength="60" placeholder="My icon" required />
+
+                <label for="icon-url">Image URL</label>
+                <input
+                  id="icon-url"
+                  name="url"
+                  type="url"
+                  maxlength="500"
+                  placeholder="https://example.com/icon.png"
+                  required
+                />
+              </div>
+              <button type="submit">Load icon</button>
+            </form>
+
+            <ul class="icon-list" id="icon-custom-list" hidden></ul>
           </div>
         </div>
         <div class="top-actions">

@@ -34,6 +34,10 @@ const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 const SOUND_IDS = ['chime', 'sparkle', 'pop', 'bell', 'off'];
 const DEFAULT_SOUNDS = { habit: 'chime', purchase: 'pop', custom: [] };
 const MAX_CUSTOM_SOUNDS = 20;
+// Built-in icons are inline SVG paths; custom ones point at image URLs.
+const ICON_IDS = ['flame', 'spark', 'bolt', 'moon', 'gem', 'heart'];
+const DEFAULT_ICON = 'flame';
+const MAX_CUSTOM_ICONS = 20;
 
 const MIME_TYPES = {
   '.html': 'text/html; charset=utf-8',
@@ -179,8 +183,12 @@ function defaultSounds() {
   return { habit: DEFAULT_SOUNDS.habit, purchase: DEFAULT_SOUNDS.purchase, custom: [] };
 }
 
+function defaultIcon() {
+  return { id: DEFAULT_ICON, custom: [] };
+}
+
 function defaultSettings() {
-  return { etherFactor: DEFAULT_ETHER_FACTOR, sounds: defaultSounds() };
+  return { etherFactor: DEFAULT_ETHER_FACTOR, sounds: defaultSounds(), icon: defaultIcon() };
 }
 
 function normalizeCustomSounds(value) {
@@ -246,6 +254,71 @@ function parseSoundsUpdate(value) {
 function parseSoundName(value) {
   const name = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
   if (!name) throw httpError(400, 'Give the sound a name.');
+  if (name.length > MAX_NAME_LENGTH) {
+    throw httpError(400, `Keep names under ${MAX_NAME_LENGTH} characters.`);
+  }
+  return name;
+}
+
+function normalizeCustomIcons(value) {
+  if (!Array.isArray(value)) return [];
+  const seen = new Set();
+  const icons = [];
+
+  for (const icon of value) {
+    if (!icon || typeof icon.id !== 'string' || !icon.id || seen.has(icon.id)) continue;
+    const name = typeof icon.name === 'string' ? icon.name.trim().replace(/\s+/g, ' ') : '';
+    const url = typeof icon.url === 'string' ? icon.url.trim() : '';
+    if (!name || name.length > MAX_NAME_LENGTH) continue;
+    if (!url || url.length > MAX_URL_LENGTH || !isHttpUrl(url)) continue;
+    seen.add(icon.id);
+    icons.push({ id: icon.id, name, url });
+    if (icons.length >= MAX_CUSTOM_ICONS) break;
+  }
+
+  return icons;
+}
+
+function iconChoiceExists(id, custom) {
+  return ICON_IDS.includes(id) || custom.some((icon) => icon.id === id);
+}
+
+function normalizeIcon(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const custom = normalizeCustomIcons(source.custom);
+  return {
+    id: iconChoiceExists(source.id, custom) ? source.id : DEFAULT_ICON,
+    custom,
+  };
+}
+
+function iconOf() {
+  state.settings.icon = normalizeIcon(state.settings.icon);
+  return state.settings.icon;
+}
+
+function parseIconChoice(value) {
+  if (typeof value !== 'string' || !iconChoiceExists(value, iconOf().custom)) {
+    throw httpError(400, 'Choose a known icon.');
+  }
+  return value;
+}
+
+function parseIconUpdate(value) {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) {
+    throw httpError(400, 'Icon must be an object.');
+  }
+
+  const current = iconOf();
+  return {
+    id: value.id === undefined ? current.id : parseIconChoice(value.id),
+    custom: current.custom,
+  };
+}
+
+function parseIconName(value) {
+  const name = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+  if (!name) throw httpError(400, 'Give the icon a name.');
   if (name.length > MAX_NAME_LENGTH) {
     throw httpError(400, `Keep names under ${MAX_NAME_LENGTH} characters.`);
   }
@@ -715,6 +788,10 @@ async function loadState() {
       if (JSON.stringify(sounds) !== JSON.stringify(parsed.settings && parsed.settings.sounds)) {
         changed = true;
       }
+      const icon = normalizeIcon(parsed.settings && parsed.settings.icon);
+      if (JSON.stringify(icon) !== JSON.stringify(parsed.settings && parsed.settings.icon)) {
+        changed = true;
+      }
 
       for (const profile of parsed.profiles) {
         if (!profile || typeof profile.id !== 'string') {
@@ -766,7 +843,12 @@ async function loadState() {
       const shop = normalizeShop(parsed.shop, profileIds);
       if (shop.changed) changed = true;
 
-      state = { settings: { etherFactor, sounds }, profiles, shop: shop.shop, activeProfileId };
+      state = {
+        settings: { etherFactor, sounds, icon },
+        profiles,
+        shop: shop.shop,
+        activeProfileId,
+      };
       if (changed) await saveState();
       return;
     }
@@ -939,6 +1021,9 @@ async function handleApi(req, res, pathname, url) {
       if (body.sounds !== undefined) {
         updates.sounds = parseSoundsUpdate(body.sounds);
       }
+      if (body.icon !== undefined) {
+        updates.icon = parseIconUpdate(body.icon);
+      }
       if (Object.keys(updates).length === 0) throw httpError(400, 'Nothing to update.');
       Object.assign(state.settings, updates);
       await saveState();
@@ -977,6 +1062,36 @@ async function handleApi(req, res, pathname, url) {
     if (!soundChoiceExists(sounds.purchase, sounds.custom)) {
       sounds.purchase = DEFAULT_SOUNDS.purchase;
     }
+    await saveState();
+    return sendJson(res, 200, state.settings);
+  }
+
+  if (pathname === '/api/settings/icons') {
+    if (req.method !== 'POST') throw httpError(405, 'Method not allowed.');
+    const body = await readJson(req);
+    const icons = iconOf();
+    if (icons.custom.length >= MAX_CUSTOM_ICONS) {
+      throw httpError(400, 'You already have enough custom icons.');
+    }
+    const icon = {
+      id: crypto.randomUUID(),
+      name: parseIconName(body.name),
+      url: parseShopUrl(body.url, 'Icon URL'),
+    };
+    icons.custom.push(icon);
+    icons.id = icon.id;
+    await saveState();
+    return sendJson(res, 201, { icon, settings: state.settings });
+  }
+
+  const iconMatch = pathname.match(/^\/api\/settings\/icons\/([\w-]+)$/);
+  if (iconMatch) {
+    if (req.method !== 'DELETE') throw httpError(405, 'Method not allowed.');
+    const icons = iconOf();
+    const index = icons.custom.findIndex((icon) => icon.id === iconMatch[1]);
+    if (index === -1) throw httpError(404, 'Icon not found.');
+    icons.custom.splice(index, 1);
+    if (!iconChoiceExists(icons.id, icons.custom)) icons.id = DEFAULT_ICON;
     await saveState();
     return sendJson(res, 200, state.settings);
   }

@@ -21,7 +21,7 @@ The app has four pages, linked from the nav bar:
 - **Dashboard** (`/dashboard`) — a combined ether balance plus a colour-coded card and chart for
   every profile, switchable between the last 7 days and the last 30 days.
 - **Shop** (`/shop`) — a shared list of rewards everyone can add and buy with ether.
-- **Settings** (`/settings`) — the global ether reward rate and profile management.
+- **Settings** (`/settings`) — the global ether reward rate, sounds, and profile management.
 
 ## Dark and light mode
 
@@ -120,6 +120,17 @@ audio file. Custom sounds appear in both pickers and in the list below, where ea
 and remove button. Removing a sound that is currently selected falls back to the built-in default.
 Custom sound URLs are stored in `data.json`, so the browser fetches them directly.
 
+## App icon
+
+Click the grindwell mark in the header to open the icon picker. It offers six built-in example
+icons — **Flame**, **Spark**, **Bolt**, **Moon**, **Gem**, and **Heart** — and the current choice is
+highlighted. Selecting one changes the mark and the browser tab icon immediately.
+
+To load your own icon, use the **Load an icon** form with a name and a direct `http(s)` link to a
+square image. New icons are added to the grid, selected straight away, and listed below with a remove
+button. Removing the selected custom icon falls back to **Flame**. The picker closes with **Esc**, its
+close button, or a click outside it.
+
 ## Shop
 
 The **Shop** page is shared by every profile. It starts empty. Tap **Add an item** to open the form,
@@ -186,6 +197,10 @@ Everything lives in `data.json` (gitignored):
           "url": "https://example.com/doorbell.mp3"
         }
       ]
+    },
+    "icon": {
+      "id": "flame",
+      "custom": []
     }
   },
   "profiles": [
@@ -236,7 +251,8 @@ by copying it; move machines by taking it with you. Older single-profile files (
 array) are migrated into a profile named **Mine** on startup, and completions from before the reward
 system are backfilled using the current factor and difficulty. `settings.sounds` stores the selected
 habit and purchase sound ids plus any custom sounds; built-in ids are `chime`, `sparkle`, `pop`,
-`bell`, and `off`.
+`bell`, and `off`. `settings.icon` stores the selected icon id plus any custom icons; built-in ids
+are `flame`, `spark`, `bolt`, `moon`, `gem`, and `heart`.
 
 ## Homelab notes
 
@@ -261,10 +277,12 @@ docker run -d --name grindwell -p 3000:3000 -v grindwell-data:/data grindwell
 | `PATCH`  | `/api/profiles/:id`        | any of `name`, `theme`                        | Updated profile           |
 | `POST`   | `/api/profiles/:id/activate` | —                                           | Updated active profile    |
 | `DELETE` | `/api/profiles/:id`        | —                                             | `204`                     |
-| `GET`    | `/api/settings`            | —                                             | `{ etherFactor, sounds }` |
-| `PATCH`  | `/api/settings`            | any of `etherFactor`, `sounds: { habit, purchase }` | Updated settings     |
+| `GET`    | `/api/settings`            | —                                             | `{ etherFactor, sounds, icon }` |
+| `PATCH`  | `/api/settings`            | any of `etherFactor`, `sounds: { habit, purchase }`, `icon: { id }` | Updated settings |
 | `POST`   | `/api/settings/sounds`     | `{ "name": "...", "url": "https://..." }`     | `{ sound, sounds }`       |
 | `DELETE` | `/api/settings/sounds/:id` | —                                             | Updated settings          |
+| `POST`   | `/api/settings/icons`      | `{ "name": "...", "url": "https://..." }`     | `{ icon, settings }`; selects the new icon |
+| `DELETE` | `/api/settings/icons/:id`  | —                                             | Updated settings          |
 | `GET`    | `/api/shop`                | —                                             | `{ items[], profiles[] }` |
 | `POST`   | `/api/shop/items`          | `{ "name": "...", "link": "...", "cost": 20, "image": "...", "consumable": false }` | Created item |
 | `PATCH`  | `/api/shop/items/:id`      | any of `name`, `link`, `cost`, `image`, `consumable`, `excludedProfiles` | Updated item |
@@ -295,7 +313,8 @@ plus the shared `shop`:
   "today": "2026-11-18",
   "settings": {
     "etherFactor": 1,
-    "sounds": { "habit": "chime", "purchase": "pop", "custom": [] }
+    "sounds": { "habit": "chime", "purchase": "pop", "custom": [] },
+    "icon": { "id": "flame", "custom": [] }
   },
   "activeProfileId": "9f12...",
   "profiles": [

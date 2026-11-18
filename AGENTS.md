@@ -78,6 +78,8 @@ These conventions are intentional. Do not undo them without asking.
   accept `?profile=<id>`; selecting a tab also activates that profile server-side.
 - The header toggle switches the whole app between dark and light. The choice lives in the browser,
   not in `data.json`, so no server restart or API change is involved.
+- The grindwell mark in the header opens the app icon picker. The selected icon and any custom icons
+  are global settings, so they persist across profiles and reloads.
 - The server listens on port `3000` by default; override it with `PORT`.
 - `data.json` is created on first run and is gitignored.
 
@@ -176,6 +178,10 @@ profile accents intact.
           "url": "https://example.com/doorbell.mp3"
         }
       ]
+    },
+    "icon": {
+      "id": "flame",
+      "custom": []
     }
   },
   "profiles": [
@@ -251,10 +257,12 @@ Key rules:
 | `PATCH` | `/api/profiles/:id` | any of `name`, `theme` |
 | `POST` | `/api/profiles/:id/activate` | legacy/API compatibility |
 | `DELETE` | `/api/profiles/:id` | `204`; last profile is rejected |
-| `GET` | `/api/settings` | `{ etherFactor, sounds }` |
-| `PATCH` | `/api/settings` | any of `etherFactor` (`0.1`–`10`), `sounds: { habit?, purchase? }` |
+| `GET` | `/api/settings` | `{ etherFactor, sounds, icon }` |
+| `PATCH` | `/api/settings` | any of `etherFactor` (`0.1`–`10`), `sounds: { habit?, purchase? }`, `icon: { id }` |
 | `POST` | `/api/settings/sounds` | `{ name, url }`; adds a custom sound |
 | `DELETE` | `/api/settings/sounds/:id` | `200`; falls back if the sound was selected |
+| `POST` | `/api/settings/icons` | `{ name, url }`; adds and selects a custom icon, returns `{ icon, settings }` |
+| `DELETE` | `/api/settings/icons/:id` | `200`; falls back if the icon was selected |
 | `GET` | `/api/shop` | `{ items[], profiles[] }` |
 | `POST` | `/api/shop/items` | `{ name, link, cost, image?, excludedProfiles? }` |
 | `PATCH` | `/api/shop/items/:id` | any of `name`, `link`, `cost`, `image`, `excludedProfiles` |
@@ -285,6 +293,10 @@ Details:
 - `settings.sounds` is `{ habit, purchase, custom[] }`. Built-in ids are `chime`, `sparkle`, `pop`,
   `bell`, and `off`; custom sounds are `{ id, name, url }` with an `http(s)` URL. Custom sounds are
   limited to `MAX_CUSTOM_SOUNDS`. Deleting a selected custom sound resets that slot to its default.
+- `settings.icon` is `{ id, custom[] }`. Built-in ids are `flame`, `spark`, `bolt`, `moon`, `gem`,
+  and `heart`; custom icons are `{ id, name, url }` with an `http(s)` image URL, limited to
+  `MAX_CUSTOM_ICONS`. Adding a custom icon selects it; deleting a selected one falls back to
+  `flame`.
 - `POST /api/habits` defaults `difficulty` to `5` and `days` to all seven.
 - `difficulty` must be an integer 1–10. `days` must be a non-empty array of unique integers 0–6.
 - Toggling a rest day on returns `400`; toggling it off is allowed.
@@ -315,11 +327,17 @@ Details:
   - `renderDashboard()` — combined balances, the Trends card, plus one `.dashboard-card` per profile.
   - `renderShop()` — shop balance, the Consumables and Rewards sections, item cards and tiles,
     progress bars, and contributor checkboxes.
-  - `renderSettings()` — ether factor field and sound pickers.
+  - `renderSettings()` — ether factor field, sound pickers, and the app icon picker.
 - `renderSounds()` fills the habit and purchase sound pickers from `SOUND_PRESETS` plus
   `settings.sounds.custom`, renders each custom sound with preview/remove buttons, and hides the
   list when there are none. `saveSoundChoice()`, `addSound()`, and `deleteSound()` persist changes
   through `/api/settings` and `/api/settings/sounds`.
+- `ICON_PRESETS` mirrors the server's icon allowlist. `renderAppIcon()` swaps the header mark and the
+  `<link rel="icon">`; `renderIconPanel()` builds the preset/custom tile grid and the custom icon
+  list. `setIconPanelOpen(open)` toggles `#icon-panel`, keeps `aria-expanded` in sync, and moves
+  focus to the first tile or back to the mark. `selectIcon()`, `addIcon()`, and `deleteIcon()` persist
+  changes through `/api/settings` and `/api/settings/icons`. `Esc`, the close button, and an outside
+  click close the panel.
 - `renderProfileTabs(current)` builds `role="tab"` buttons, one per profile, each carrying that
   profile's `data-theme`. Arrow keys, Home, and End move between tabs.
 - `selectProfileTab(id)` updates `activeTabId`, clears any inline edit, re-renders, and activates
@@ -399,6 +417,8 @@ Details:
 - Nav, page titles, dashboard totals, Shop controls, and Settings controls must not use `--accent`;
   tests enforce this. Contributor checkboxes are the exception: their labels carry a profile's
   `data-theme` so the checkbox and dot use that profile's palette.
+- The header mark and icon picker are shared chrome. Use `--chrome*` variables for selected tiles,
+  focus rings, and the panel border; do not tint them with a profile palette.
 - Keep `THEMES` in `public/app.js`, the `[data-theme]` blocks in `public/styles.css`, and
   `THEME_IDS` in `server.js` in the same order.
 - Preserve mobile layout (`max-width: 420px`) and `prefers-reduced-motion` handling.
@@ -472,6 +492,19 @@ ether = max(1, round(difficulty × factor))
 - Deleting a custom sound that is selected resets that slot to its built-in default.
 - Custom audio is fetched by the browser, so an unreachable URL simply fails silently.
 
+### App icon
+
+- The app icon is a global setting, not per profile.
+- Built-in ids are `flame` (default), `spark`, `bolt`, `moon`, `gem`, and `heart`. They are inline SVG
+  paths in `ICON_PRESETS` and render as `currentColor` in the header.
+- `settings.icon.custom` holds `{ id, name, url }` entries. URLs must be `http(s)`, names are capped
+  at `MAX_NAME_LENGTH`, and the list is capped at `MAX_CUSTOM_ICONS`.
+- Adding a custom icon selects it immediately; deleting the selected custom icon falls back to
+  `flame`. The header mark and the browser tab icon both follow the selection.
+- The picker is inline in the header, not a `<dialog>`. Keep `aria-expanded`, focus handling, `Esc`,
+  the close button, and outside-click dismissal working.
+- Custom images are fetched by the browser, so an unreachable URL simply shows the fallback art.
+
 ### Shop
 
 - Shop items are shared by every profile and start empty.
@@ -516,6 +549,12 @@ ether = max(1, round(difficulty × factor))
 3. Add `'name'` to `THEME_IDS` in `server.js`.
 4. Keep the order identical in all three places.
 5. Run the theme-sync tests.
+
+### Add an app icon preset
+
+1. Add `{ id, label, path }` to `ICON_PRESETS` in `public/app.js` using a 24×24 SVG path.
+2. Add the id to `ICON_IDS` in `server.js` in the same order.
+3. Run the icon-sync test and check the picker in both appearances.
 
 ### Add or change a colour
 

@@ -2,6 +2,15 @@
 
 const els = {
   date: document.getElementById('date'),
+  appIcon: document.getElementById('app-icon'),
+  appIconArt: document.getElementById('app-icon-art'),
+  iconPanel: document.getElementById('icon-panel'),
+  iconPanelClose: document.getElementById('icon-panel-close'),
+  iconPresets: document.getElementById('icon-presets'),
+  iconForm: document.getElementById('icon-form'),
+  iconName: document.getElementById('icon-name'),
+  iconUrl: document.getElementById('icon-url'),
+  iconCustomList: document.getElementById('icon-custom-list'),
   appearanceToggle: document.getElementById('appearance-toggle'),
   appearanceLabel: document.getElementById('appearance-label'),
   profileTabs: document.getElementById('profile-tabs'),
@@ -67,6 +76,31 @@ const SOUND_PRESETS = [
   { id: 'bell', label: 'Bell', notes: [783.99, 1046.5, 1318.51] },
   { id: 'off', label: 'Off', notes: null },
 ];
+// Built-in icons are inline SVG paths; custom icons come from settings.icon.custom.
+const ICON_PRESETS = [
+  {
+    id: 'flame',
+    label: 'Flame',
+    path: 'M12.6 2.2c.4 3.3-1.4 4.9-2.9 6.6C8 10.7 6.4 12.6 6.4 15a5.6 5.6 0 0 0 11.2 0c0-2.3-1-4.2-2.5-5.7-.2 1.5-1 2.5-2 2.8.5-3.3-.1-6.9-1.5-9.9Z',
+  },
+  {
+    id: 'spark',
+    label: 'Spark',
+    path: 'M12 2l2.2 7.8L22 12l-7.8 2.2L12 22l-2.2-7.8L2 12l7.8-2.2Z',
+  },
+  { id: 'bolt', label: 'Bolt', path: 'M13 2 4 14h6l-1 8 9-12h-6l1-8Z' },
+  {
+    id: 'moon',
+    label: 'Moon',
+    path: 'M20.7 14.2A8.7 8.7 0 0 1 9.8 3.3 8.8 8.8 0 1 0 20.7 14.2Z',
+  },
+  { id: 'gem', label: 'Gem', path: 'M12 2 2.5 8.8 12 22l9.5-13.2L12 2Z' },
+  {
+    id: 'heart',
+    label: 'Heart',
+    path: 'M12 21s-8-5.1-8-11a4.6 4.6 0 0 1 8-3 4.6 4.6 0 0 1 8 3c0 5.9-8 11-8 11Z',
+  },
+];
 const PAGE_PATH = window.location.pathname.replace(/\/+$/, '') || '/';
 const PAGE =
   PAGE_PATH === '/dashboard'
@@ -84,7 +118,11 @@ const STAR_PATH =
   'M12 2.2l2.94 6.02 6.64.96-4.79 4.67 1.13 6.61L12 17.36l-5.92 3.1 1.13-6.61L2.42 9.18l6.64-.96L12 2.2z';
 
 let profiles = [];
-let settings = { etherFactor: 1, sounds: { habit: 'chime', purchase: 'pop', custom: [] } };
+let settings = {
+  etherFactor: 1,
+  sounds: { habit: 'chime', purchase: 'pop', custom: [] },
+  icon: { id: 'flame', custom: [] },
+};
 let shop = { items: [] };
 let today = '';
 let activeTabId = null;
@@ -1750,6 +1788,8 @@ function renderSettings() {
     els.etherFactor.value = String(settings.etherFactor);
   }
   renderSounds();
+  renderAppIcon();
+  renderIconPanel();
 }
 
 async function saveSoundChoice(slot, value) {
@@ -1802,6 +1842,204 @@ async function deleteSound(sound) {
   }
 }
 
+/* ---------- app icon ---------- */
+
+function customIcons() {
+  const list = settings.icon && settings.icon.custom;
+  return Array.isArray(list) ? list : [];
+}
+
+function selectedIconId() {
+  return (settings.icon && settings.icon.id) || 'flame';
+}
+
+function iconLabel(id) {
+  const custom = customIcons().find((icon) => icon.id === id);
+  if (custom) return custom.name;
+  return (ICON_PRESETS.find((icon) => icon.id === id) || ICON_PRESETS[0]).label;
+}
+
+function iconArtNode(id, className = '') {
+  const custom = customIcons().find((icon) => icon.id === id);
+  if (custom) {
+    const img = document.createElement('img');
+    img.src = custom.url;
+    img.alt = '';
+    if (className) img.className = className;
+    return img;
+  }
+
+  const preset = ICON_PRESETS.find((icon) => icon.id === id) || ICON_PRESETS[0];
+  const svg = document.createElementNS(SVG_NS, 'svg');
+  svg.setAttribute('viewBox', '0 0 24 24');
+  if (className) svg.setAttribute('class', className);
+  const path = document.createElementNS(SVG_NS, 'path');
+  path.setAttribute('d', preset.path);
+  svg.append(path);
+  return svg;
+}
+
+function faviconHref(id) {
+  const custom = customIcons().find((icon) => icon.id === id);
+  if (custom) return custom.url;
+
+  const preset = ICON_PRESETS.find((icon) => icon.id === id) || ICON_PRESETS[0];
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path fill="#ff7a2f" d="${preset.path}"/></svg>`;
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+function renderAppIcon() {
+  if (!els.appIconArt || !els.appIcon) return;
+
+  const id = selectedIconId();
+  els.appIconArt.replaceChildren(iconArtNode(id));
+  els.appIcon.setAttribute(
+    'aria-label',
+    `Change app icon (currently ${iconLabel(id)}).`,
+  );
+  els.appIcon.title = `App icon: ${iconLabel(id)}. Change it.`;
+
+  const favicon = document.querySelector('link[rel="icon"]');
+  if (favicon) favicon.setAttribute('href', faviconHref(id));
+}
+
+function iconTile(icon) {
+  const selected = selectedIconId() === icon.id;
+  const label = icon.label || icon.name;
+
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = 'icon-tile' + (selected ? ' is-selected' : '');
+  button.dataset.icon = icon.id;
+  button.setAttribute('aria-pressed', String(selected));
+  button.setAttribute('aria-label', `${label}${selected ? ' (selected)' : ''}`);
+  button.title = label;
+  button.append(iconArtNode(icon.id, 'icon-tile-art'));
+
+  const name = document.createElement('span');
+  name.className = 'icon-tile-name';
+  name.textContent = label;
+  button.append(name);
+  button.addEventListener('click', () => selectIcon(icon.id));
+  return button;
+}
+
+function iconRow(icon) {
+  const item = document.createElement('li');
+  item.className = 'icon-item';
+
+  const art = iconArtNode(icon.id, 'icon-item-art');
+
+  const main = document.createElement('div');
+  main.className = 'icon-item-main';
+
+  const name = document.createElement('span');
+  name.className = 'icon-item-name';
+  name.textContent = icon.name;
+
+  const url = document.createElement('span');
+  url.className = 'icon-item-url';
+  url.textContent = icon.url;
+
+  main.append(name, url);
+
+  const remove = document.createElement('button');
+  remove.type = 'button';
+  remove.className = 'profile-icon';
+  remove.textContent = '×';
+  remove.title = `Remove ${icon.name}`;
+  remove.setAttribute('aria-label', `Remove ${icon.name}`);
+  remove.addEventListener('click', () => deleteIcon(icon));
+
+  item.append(art, main, remove);
+  return item;
+}
+
+function renderIconPanel() {
+  if (!els.iconPresets) return;
+
+  const custom = customIcons();
+  els.iconPresets.replaceChildren(
+    ...ICON_PRESETS.map(iconTile),
+    ...custom.map((icon) => iconTile({ id: icon.id, name: icon.name })),
+  );
+
+  els.iconCustomList.replaceChildren(...custom.map(iconRow));
+  els.iconCustomList.hidden = custom.length === 0;
+}
+
+function setIconPanelOpen(open, { focus = true } = {}) {
+  if (!els.iconPanel || !els.appIcon) return;
+
+  els.iconPanel.hidden = !open;
+  els.appIcon.setAttribute('aria-expanded', String(open));
+
+  if (!open) {
+    if (focus) els.appIcon.focus();
+    return;
+  }
+
+  renderIconPanel();
+  if (focus) els.iconPresets.querySelector('button')?.focus();
+}
+
+function focusIconTile(id) {
+  const tile = [...els.iconPresets.querySelectorAll('button')].find(
+    (button) => button.dataset.icon === id,
+  );
+  if (tile) tile.focus();
+}
+
+async function selectIcon(id) {
+  try {
+    settings = await api('/api/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ icon: { id } }),
+    });
+    renderSettings();
+    focusIconTile(id);
+    toast(`App icon set to ${iconLabel(id)}.`);
+  } catch (error) {
+    toast(error.message);
+    renderIconPanel();
+  }
+}
+
+async function addIcon(event) {
+  event.preventDefault();
+
+  const name = els.iconName.value.trim();
+  const url = els.iconUrl.value.trim();
+  if (!name || !url) return;
+
+  try {
+    const data = await api('/api/settings/icons', {
+      method: 'POST',
+      body: JSON.stringify({ name, url }),
+    });
+    settings = data.settings || settings;
+    els.iconForm.reset();
+    renderSettings();
+    focusIconTile(data.icon.id);
+    toast(`${data.icon.name} loaded.`);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
+async function deleteIcon(icon) {
+  if (!window.confirm(`Remove "${icon.name}"?`)) return;
+
+  try {
+    settings = await api(`/api/settings/icons/${icon.id}`, { method: 'DELETE' });
+    renderSettings();
+    focusIconTile(selectedIconId());
+    toast(`${icon.name} removed.`);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 async function saveEtherFactor(event) {
   event.preventDefault();
   const factor = Number(els.etherFactor.value);
@@ -1832,6 +2070,7 @@ async function load({ silent = false } = {}) {
     settings = data.settings || {
       etherFactor: 1,
       sounds: { habit: 'chime', purchase: 'pop', custom: [] },
+      icon: { id: 'flame', custom: [] },
     };
     shop = data.shop && Array.isArray(data.shop.items) ? data.shop : { items: [] };
     today = data.today;
@@ -2046,13 +2285,27 @@ document.addEventListener('keydown', (event) => {
     closeEdit();
     return;
   }
+  if (els.iconPanel && !els.iconPanel.hidden) {
+    event.preventDefault();
+    setIconPanelOpen(false);
+    return;
+  }
   if (PAGE === 'shop' && !els.shopForm.hidden) {
     event.preventDefault();
     setShopFormOpen(false);
   }
 });
 
+document.addEventListener('click', (event) => {
+  if (!els.iconPanel || els.iconPanel.hidden) return;
+  if (event.target.closest('#icon-panel') || event.target.closest('#app-icon')) return;
+  setIconPanelOpen(false, { focus: false });
+});
+
 els.profileAdd.addEventListener('click', createProfile);
+els.appIcon.addEventListener('click', () => setIconPanelOpen(els.iconPanel.hidden));
+els.iconPanelClose.addEventListener('click', () => setIconPanelOpen(false));
+els.iconForm.addEventListener('submit', addIcon);
 els.etherForm.addEventListener('submit', saveEtherFactor);
 els.habitSound.addEventListener('change', () => saveSoundChoice('habit', els.habitSound.value));
 els.purchaseSound.addEventListener('change', () =>

@@ -224,6 +224,7 @@ body[data-page="shop"] {
 }
 
 .brand {
+  position: relative;
   display: flex;
   align-items: center;
   gap: 12px;
@@ -232,6 +233,7 @@ body[data-page="shop"] {
 .mark {
   width: 44px;
   height: 44px;
+  padding: 0;
   border-radius: 13px;
   display: grid;
   place-items: center;
@@ -239,12 +241,242 @@ body[data-page="shop"] {
   background: linear-gradient(150deg, rgba(var(--tint-rgb), 0.08), rgba(var(--tint-rgb), 0.02));
   border: 1px solid var(--border);
   box-shadow: inset 0 1px 0 rgba(var(--tint-rgb), 0.06);
+  font: inherit;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.mark:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+  background: linear-gradient(150deg, rgba(var(--tint-rgb), 0.12), rgba(var(--tint-rgb), 0.04));
+}
+
+.mark:focus-visible {
+  outline: 2px solid rgba(var(--chrome-bright-rgb), 0.9);
+  outline-offset: 2px;
+}
+
+.mark[aria-expanded="true"] {
+  color: var(--chrome-bright);
+  border-color: rgba(var(--chrome-rgb), 0.55);
+  background: rgba(var(--chrome-rgb), 0.12);
 }
 
 .mark svg {
   width: 22px;
   height: 22px;
   fill: currentColor;
+}
+
+#app-icon-art {
+  display: grid;
+  place-items: center;
+  width: 100%;
+  height: 100%;
+}
+
+.mark img {
+  width: 26px;
+  height: 26px;
+  border-radius: 7px;
+  object-fit: cover;
+}
+
+/* app icon picker */
+
+.icon-panel {
+  position: absolute;
+  top: calc(100% + 10px);
+  left: 0;
+  z-index: 30;
+  width: min(360px, calc(100vw - 40px));
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+  border: 1px solid rgba(var(--chrome-rgb), 0.32);
+  border-radius: var(--radius);
+  background: var(--surface);
+  box-shadow: var(--panel-shadow);
+}
+
+.icon-panel[hidden] {
+  display: none;
+}
+
+.icon-panel-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.icon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(68px, 1fr));
+  gap: 8px;
+}
+
+.icon-tile {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 9px 6px 8px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-raised);
+  color: var(--muted);
+  font: inherit;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
+}
+
+.icon-tile:hover {
+  color: var(--text);
+  border-color: var(--border-strong);
+}
+
+.icon-tile:focus-visible {
+  outline: 2px solid rgba(var(--chrome-bright-rgb), 0.9);
+  outline-offset: 2px;
+}
+
+.icon-tile.is-selected {
+  color: var(--chrome-bright);
+  border-color: rgba(var(--chrome-rgb), 0.55);
+  background: rgba(var(--chrome-rgb), 0.12);
+}
+
+.icon-tile-art {
+  width: 26px;
+  height: 26px;
+  fill: currentColor;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.icon-tile-name {
+  max-width: 100%;
+  overflow: hidden;
+  color: inherit;
+  font-size: 0.64rem;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.icon-form {
+  display: grid;
+  gap: 10px;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.icon-form .settings-note {
+  margin: 0;
+}
+
+.icon-form-grid {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 8px 12px;
+  align-items: center;
+}
+
+.icon-form-grid label {
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+
+.icon-form-grid input {
+  padding: 9px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: var(--surface-raised);
+  color: var(--text);
+  font: inherit;
+  font-size: 0.88rem;
+}
+
+.icon-form-grid input:focus-visible {
+  outline: 2px solid rgba(var(--chrome-bright-rgb), 0.9);
+  outline-offset: 2px;
+}
+
+.icon-form button {
+  justify-self: start;
+  min-height: 38px;
+  padding: 0 16px;
+  border: 1px solid rgba(var(--chrome-rgb), 0.38);
+  border-radius: 10px;
+  background: rgba(var(--chrome-rgb), 0.14);
+  color: var(--chrome-bright);
+  font: inherit;
+  font-size: 0.82rem;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.icon-form button:hover {
+  background: rgba(var(--chrome-rgb), 0.22);
+  border-color: rgba(var(--chrome-rgb), 0.55);
+}
+
+.icon-form button:focus-visible {
+  outline: 2px solid rgba(var(--chrome-bright-rgb), 0.9);
+  outline-offset: 2px;
+}
+
+.icon-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 8px;
+}
+
+.icon-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  background: var(--surface-raised);
+}
+
+.icon-item-art {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  fill: currentColor;
+  border-radius: 6px;
+  object-fit: cover;
+}
+
+.icon-item-main {
+  flex: 1;
+  min-width: 0;
+  display: grid;
+  gap: 2px;
+}
+
+.icon-item-name {
+  font-size: 0.88rem;
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.icon-item-url {
+  color: var(--muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 h1 {
@@ -2769,6 +3001,19 @@ body[data-page="shop"] .page-title {
 
   .sound-picker select {
     max-width: none;
+  }
+
+  .icon-form-grid {
+    grid-template-columns: 1fr;
+    gap: 4px;
+  }
+
+  .icon-form-grid label {
+    margin-top: 4px;
+  }
+
+  .icon-grid {
+    grid-template-columns: repeat(auto-fill, minmax(58px, 1fr));
   }
 }
 
