@@ -1,4 +1,4 @@
-/* Compact habit input: "name ; difficulty ; days to skip".
+/* Compact habit input: "name ; difficulty ; urgency ; days to skip".
    Loaded as a plain script in the browser, and exported for Node tests. */
 (function (root, factory) {
   const api = factory();
@@ -9,6 +9,7 @@
 
   const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
   const DEFAULT_DIFFICULTY = 5;
+  const DEFAULT_URGENCY = 1;
   const MAX_NAME_LENGTH = 60;
 
   const DAY_ALIASES = {
@@ -53,11 +54,13 @@
 
   function parseHabitInput(raw) {
     const parts = String(raw).split(';').map((part) => part.trim());
-    if (parts.length > 3) {
-      throw new Error('Use at most two semicolons: name ; difficulty ; days to skip.');
+    if (parts.length > 4) {
+      throw new Error(
+        'Use at most three semicolons: name ; difficulty ; urgency ; days to skip.',
+      );
     }
 
-    const [rawName, second = '', third = ''] = parts;
+    const [rawName, second = '', third = '', fourth = ''] = parts;
     const name = rawName.replace(/\s+/g, ' ');
 
     if (!name) throw new Error('Give the habit a name.');
@@ -66,33 +69,37 @@
     }
 
     let difficulty = DEFAULT_DIFFICULTY;
-    let daysText = '';
-
     if (second) {
-      if (/^\d+$/.test(second)) {
-        difficulty = Number(second);
-        daysText = third;
-      } else if (third) {
-        throw new Error('Put the difficulty (1-10) before the days, separated by semicolons.');
-      } else {
-        // "name ; sat,sun" is accepted as shorthand for skipping those days.
-        daysText = second;
+      if (!/^\d+$/.test(second)) {
+        throw new Error('Difficulty must be a whole number from 1 to 10.');
       }
-    } else {
-      daysText = third;
+      difficulty = Number(second);
+    }
+
+    let urgency = DEFAULT_URGENCY;
+    if (third) {
+      if (!/^\d+$/.test(third)) {
+        throw new Error(
+          'Urgency must be a whole number from 0 to 10. Put days to skip in the fourth part: name ; difficulty ; urgency ; days to skip.',
+        );
+      }
+      urgency = Number(third);
     }
 
     if (difficulty < 1 || difficulty > 10) {
       throw new Error('Difficulty must be a whole number from 1 to 10.');
     }
+    if (urgency < 0 || urgency > 10) {
+      throw new Error('Urgency must be a whole number from 0 to 10.');
+    }
 
-    const skip = parseSkipDays(daysText);
+    const skip = parseSkipDays(fourth);
     const days = ALL_DAYS.filter((day) => !skip.has(day));
     if (days.length === 0) {
       throw new Error('A habit needs at least one day. Do not skip all seven.');
     }
 
-    return { name, difficulty, days };
+    return { name, difficulty, urgency, days };
   }
 
   return { parseHabitInput };

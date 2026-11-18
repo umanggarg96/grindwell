@@ -135,6 +135,7 @@
       <nav class="page-nav" aria-label="Pages">
         <a href="/" data-nav="habits">Habits</a>
         <a href="/dashboard" data-nav="dashboard">Dashboard</a>
+        <a href="/jobs" data-nav="jobs">Jobs</a>
         <a href="/shop" data-nav="shop">Shop</a>
         <a href="/settings" data-nav="settings">Settings</a>
       </nav>
@@ -217,6 +218,10 @@
                   <dt id="ether-range-label">Last 7 days</dt>
                   <dd id="ether-range">0</dd>
                 </div>
+                <div>
+                  <dt>Penalties</dt>
+                  <dd id="ether-penalties">0</dd>
+                </div>
               </dl>
             </div>
           </section>
@@ -237,6 +242,114 @@
         <p class="page-hint">
           Rewards are global. Adjust the rate in <a href="/settings">Settings</a>.
         </p>
+      </section>
+
+      <section class="page" id="page-jobs" hidden aria-labelledby="jobs-title">
+        <header class="page-head jobs-head">
+          <div class="page-head-text">
+            <h2 class="page-title" id="jobs-title">Jobs</h2>
+            <p class="page-subtitle">Post work, claim it, and earn ether for finishing on time</p>
+          </div>
+          <label class="jobs-actor">
+            <span>Acting as</span>
+            <select id="job-actor" aria-label="Profile acting on the job board"></select>
+          </label>
+        </header>
+
+        <div class="jobs-board">
+          <section class="jobs-box jobs-add-box" aria-labelledby="jobs-add-title">
+            <h3 class="jobs-box-title" id="jobs-add-title">Add a new job</h3>
+            <form class="jobs-form" id="job-form">
+              <label for="job-title">Title / description</label>
+              <textarea
+                id="job-title"
+                name="title"
+                maxlength="160"
+                rows="2"
+                placeholder="Fix the leaking tap"
+                required
+              ></textarea>
+
+              <div class="jobs-form-row">
+                <div>
+                  <label for="job-reward">Ether reward</label>
+                  <input
+                    id="job-reward"
+                    name="reward"
+                    type="number"
+                    min="1"
+                    max="1000"
+                    step="1"
+                    inputmode="numeric"
+                    placeholder="20"
+                    required
+                  />
+                </div>
+                <div>
+                  <label for="job-eta">ETA (minutes)</label>
+                  <input
+                    id="job-eta"
+                    name="etaMinutes"
+                    type="number"
+                    min="1"
+                    max="10080"
+                    step="1"
+                    inputmode="numeric"
+                    placeholder="60"
+                    required
+                  />
+                </div>
+              </div>
+
+              <button type="submit">Post job</button>
+            </form>
+            <p class="jobs-hint">
+              Finish before half the ETA for 2× ether, before the ETA for 1.5×, or up to 10%
+              late for 1×. Passing twice the ETA fails the job.
+            </p>
+          </section>
+
+          <section class="jobs-box jobs-inbox-box" aria-labelledby="jobs-inbox-title">
+            <div class="jobs-box-head">
+              <h3 class="jobs-box-title" id="jobs-inbox-title">Inbox</h3>
+              <span class="jobs-count" id="jobs-inbox-count">0</span>
+            </div>
+            <div class="jobs-list" id="jobs-inbox" role="list"></div>
+            <p class="jobs-empty" id="jobs-inbox-empty">No jobs waiting.</p>
+          </section>
+
+          <section class="jobs-box jobs-progress-box" aria-labelledby="jobs-progress-title">
+            <div class="jobs-box-head">
+              <h3 class="jobs-box-title" id="jobs-progress-title">In progress</h3>
+              <span class="jobs-count" id="jobs-progress-count">0</span>
+            </div>
+            <div class="jobs-profiles" id="jobs-progress"></div>
+          </section>
+
+          <section
+            class="jobs-box jobs-completed-box"
+            id="jobs-completed-box"
+            aria-labelledby="jobs-completed-title"
+          >
+            <div class="jobs-box-head">
+              <h3 class="jobs-box-title" id="jobs-completed-title">Completed</h3>
+              <span class="jobs-count" id="jobs-completed-count">0</span>
+            </div>
+            <div class="jobs-list" id="jobs-completed" role="list"></div>
+            <p class="jobs-empty" id="jobs-completed-empty">Nothing finished yet.</p>
+          </section>
+
+          <section class="jobs-box jobs-failed-box" aria-labelledby="jobs-failed-title">
+            <div class="jobs-box-head">
+              <h3 class="jobs-box-title" id="jobs-failed-title">Failed</h3>
+              <span class="jobs-count" id="jobs-failed-count">0</span>
+            </div>
+            <div class="jobs-list" id="jobs-failed" role="list"></div>
+            <p class="jobs-empty" id="jobs-failed-empty">No failures.</p>
+          </section>
+        </div>
+
+        <p class="jobs-status" id="jobs-status" role="status" aria-live="polite"></p>
       </section>
 
       <section class="page" id="page-shop" hidden aria-labelledby="shop-title">
@@ -348,7 +461,7 @@
       <section class="page" id="page-settings" hidden aria-labelledby="settings-title">
         <header class="page-head">
           <h2 class="page-title" id="settings-title">Settings</h2>
-          <p class="page-subtitle">Shared reward rate and profiles</p>
+          <p class="page-subtitle">Shared reward and penalty rates and profiles</p>
         </header>
 
         <form class="settings-card factor-form" id="ether-form">
@@ -369,6 +482,28 @@
           <p class="factor-note">
             Every completion earns <strong>max(1, round(difficulty × factor))</strong> ether.
             Changes apply to future completions; earned ether is locked in.
+          </p>
+        </form>
+
+        <form class="settings-card factor-form" id="urgency-form">
+          <label for="urgency-factor">Ether lost per urgency point</label>
+          <div class="factor-row">
+            <input
+              id="urgency-factor"
+              name="factor"
+              type="number"
+              min="0.1"
+              max="10"
+              step="0.1"
+              inputmode="decimal"
+              required
+            />
+            <button type="submit">Save</button>
+          </div>
+          <p class="factor-note">
+            Missing a scheduled habit costs
+            <strong>max(1, round(urgency × factor))</strong> ether. Urgency 0 disables penalties.
+            Recorded penalties are locked in.
           </p>
         </form>
 
@@ -446,6 +581,7 @@
     </main>
 
     <script src="/habit-input.js"></script>
+    <script src="/job-math.js"></script>
     <script src="/app.js"></script>
   </body>
 </html>

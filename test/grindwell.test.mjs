@@ -13,6 +13,7 @@ const port = Number(process.env.TEST_PORT || 3111);
 
 const require = createRequire(import.meta.url);
 const { parseHabitInput } = require(path.join(root, 'public/habit-input.js'));
+const { jobOutcome, jobPayout } = require(path.join(root, 'public/job-math.js'));
 
 let failures = 0;
 function check(label, condition, detail = '') {
@@ -74,6 +75,15 @@ await fs.writeFile(
         days: [otherDow],
         completions: [TODAY],
       },
+      {
+        id: 'penalty-seed',
+        name: 'Penalty seed',
+        createdAt: new Date().toISOString(),
+        urgency: 6,
+        penaltyFrom: daysAgo(5),
+        days: [0, 1, 2, 3, 4, 5, 6],
+        completions: [],
+      },
     ],
   }),
 );
@@ -128,7 +138,7 @@ try {
     r.body.profile?.name === 'Mine' &&
       r.body.profile?.theme === 'ember' &&
       r.body.profiles?.length === 1 &&
-      r.body.profiles[0].habitCount === 4,
+      r.body.profiles[0].habitCount === 5,
     JSON.stringify(r.body.profiles),
   );
 
@@ -140,6 +150,11 @@ try {
       legacy.dueToday === true,
     JSON.stringify(legacy),
   );
+  check(
+    'legacy habits opt out of penalties',
+    legacy.urgency === 0 && legacy.penalty === 0,
+    JSON.stringify({ urgency: legacy.urgency, penalty: legacy.penalty }),
+  );
 
   const seededRaw = JSON.parse(await fs.readFile(dataFile, 'utf8'));
   check(
@@ -147,7 +162,7 @@ try {
     Array.isArray(
       seededRaw.profiles[0].habits.find((habit) => habit.id === 'legacy-habit').days,
     ) &&
-      seededRaw.profiles[0].habits.length === 4 &&
+      seededRaw.profiles[0].habits.length === 5 &&
       seededRaw.activeProfileId === seededRaw.profiles[0].id,
   );
 
@@ -182,9 +197,106 @@ try {
     `${r.status} ${JSON.stringify(r.body)}`,
   );
 
-  for (const seedId of ['legacy-habit', 'weekly-today', 'weekly-missed', 'rest-bonus']) {
+  console.log('\nurgency penalties');
+  r = await call('/api/habits');
+  const penaltySeed = r.body.habits.find((habit) => habit.id === 'penalty-seed');
+  check(
+    'seeded misses are settled automatically',
+    r.status === 200 &&
+      penaltySeed.urgency === 6 &&
+      penaltySeed.penalty === 6 &&
+      r.body.ether.penalties === 30 &&
+      r.body.ether.total === -10,
+    JSON.stringify({
+      urgency: penaltySeed.urgency,
+      penalty: penaltySeed.penalty,
+      penalties: r.body.ether.penalties,
+      total: r.body.ether.total,
+    }),
+  );
+  check(
+    'penalties count in the range and per-day net',
+    r.body.ether.penaltyLast7 === 30 &&
+      r.body.ether.netLast7 === -25 &&
+      r.body.ether.days.find((day) => day.date === daysAgo(5)).penalty === 6 &&
+      r.body.ether.days.find((day) => day.date === daysAgo(5)).net === -6,
+    JSON.stringify({
+      penaltyLast7: r.body.ether.penaltyLast7,
+      netLast7: r.body.ether.netLast7,
+      day: r.body.ether.days.find((day) => day.date === daysAgo(5)),
+    }),
+  );
+  check(
+    'summary tracks missed scheduled days without counting today',
+    r.body.ether.missedLast7 === 5 &&
+      r.body.ether.missedLast30 === 5 &&
+      r.body.ether.days.find((day) => day.date === daysAgo(5)).missed === 1 &&
+      r.body.ether.days.find((day) => day.date === daysAgo(6)).missed === 0 &&
+      r.body.ether.days[29].missed === 0,
+    JSON.stringify({
+      missedLast7: r.body.ether.missedLast7,
+      missedLast30: r.body.ether.missedLast30,
+      from: r.body.ether.days.find((day) => day.date === daysAgo(5)),
+      before: r.body.ether.days.find((day) => day.date === daysAgo(6)),
+      today: r.body.ether.days[29],
+    }),
+  );
+  check(
+    'negative balances are allowed',
+    r.body.profile.ether < 0,
+    String(r.body.profile.ether),
+  );
+
+  const penaltyDisk = JSON.parse(await fs.readFile(dataFile, 'utf8'));
+  const penaltyOnDisk = penaltyDisk.profiles[0].habits.find(
+    (habit) => habit.id === 'penalty-seed',
+  );
+  check(
+    'penalties persist per missed date and skip today',
+    penaltyOnDisk.penaltyFrom === daysAgo(5) &&
+      Object.keys(penaltyOnDisk.penalties).length === 5 &&
+      penaltyOnDisk.penalties[daysAgo(5)] === 6 &&
+      penaltyOnDisk.penalties[daysAgo(1)] === 6 &&
+      !penaltyOnDisk.penalties[TODAY],
+    JSON.stringify(penaltyOnDisk.penalties),
+  );
+
+  r = await call('/api/settings', { method: 'PATCH', ...json({ urgencyFactor: 2 }) });
+  check('urgency factor updated', r.status === 200 && r.body.urgencyFactor === 2);
+  r = await call('/api/habits');
+  check(
+    'recorded penalties keep the old rate',
+    r.body.ether.penalties === 30 &&
+      r.body.habits.find((habit) => habit.id === 'penalty-seed').penalty === 12,
+    JSON.stringify({
+      penalties: r.body.ether.penalties,
+      penalty: r.body.habits.find((habit) => habit.id === 'penalty-seed').penalty,
+    }),
+  );
+  await call('/api/settings', { method: 'PATCH', ...json({ urgencyFactor: 1 }) });
+
+  for (const seedId of [
+    'legacy-habit',
+    'weekly-today',
+    'weekly-missed',
+    'rest-bonus',
+    'penalty-seed',
+  ]) {
     await call(`/api/habits/${seedId}`, { method: 'DELETE' });
   }
+
+  r = await call('/api/habits');
+  check(
+    'deleting a habit keeps its penalties',
+    r.body.ether.penalties === 30 && r.body.ether.total === -10,
+    JSON.stringify({ penalties: r.body.ether.penalties, total: r.body.ether.total }),
+  );
+  const penaltyRetiredDisk = JSON.parse(await fs.readFile(dataFile, 'utf8'));
+  check(
+    'retired penalties persist on disk',
+    penaltyRetiredDisk.profiles[0].retiredPenalties[daysAgo(5)] === 6,
+    JSON.stringify(penaltyRetiredDisk.profiles[0].retiredPenalties),
+  );
 
   r = await call('/api/habits');
   check('empty habit list', r.status === 200 && Array.isArray(r.body.habits) && r.body.habits.length === 0);
@@ -194,6 +306,12 @@ try {
   // before the ether tests that assert exact totals.
   r = await call('/api/habits', { method: 'DELETE' });
   check('reset clears seeded ether', r.status === 204);
+  r = await call('/api/habits');
+  check(
+    'reset clears retired penalties',
+    r.body.ether.penalties === 0 && r.body.ether.total === 0,
+    JSON.stringify({ penalties: r.body.ether.penalties, total: r.body.ether.total }),
+  );
 
   console.log('\ncreate');
   r = await call('/api/habits', { method: 'POST', ...json({ name: '  Read   10 pages  ' }) });
@@ -202,6 +320,11 @@ try {
   check('starts not done', r.body.doneToday === false);
   check('starts with empty streak', r.body.streak === 0);
   check('defaults difficulty to 5', r.body.difficulty === 5, String(r.body.difficulty));
+  check(
+    'defaults urgency to 1',
+    r.body.urgency === 1 && r.body.penalty === 1,
+    JSON.stringify({ urgency: r.body.urgency, penalty: r.body.penalty }),
+  );
   check(
     'defaults to daily schedule',
     JSON.stringify(r.body.days) === JSON.stringify([0, 1, 2, 3, 4, 5, 6]) && r.body.dueToday === true,
@@ -226,6 +349,36 @@ try {
   }
 
   await call(`/api/habits/${hardId}`, { method: 'DELETE' });
+
+  console.log('\nurgency');
+  r = await call('/api/habits', { method: 'POST', ...json({ name: 'Urgent task', urgency: 7 }) });
+  check(
+    'urgency 7 stored with its penalty',
+    r.status === 201 && r.body.urgency === 7 && r.body.penalty === 7,
+    JSON.stringify({ urgency: r.body.urgency, penalty: r.body.penalty }),
+  );
+  const urgentId = r.body.id;
+
+  for (const bad of [-1, 11, 1.5, '7', null]) {
+    r = await call('/api/habits', { method: 'POST', ...json({ name: 'Bad urgency', urgency: bad }) });
+    check(`urgency ${JSON.stringify(bad)} rejected`, r.status === 400, `${r.status} ${JSON.stringify(r.body)}`);
+  }
+
+  r = await call(`/api/habits/${urgentId}`, { method: 'PATCH', ...json({ urgency: 4 }) });
+  check('urgency edit works', r.status === 200 && r.body.urgency === 4);
+  const urgencyDisk = JSON.parse(await fs.readFile(dataFile, 'utf8'));
+  const urgentOnDisk = urgencyDisk.profiles
+    .find((profile) => profile.id === urgencyDisk.activeProfileId)
+    .habits.find((habit) => habit.id === urgentId);
+  check(
+    'urgency edits restart the penalty window at today',
+    urgentOnDisk.penaltyFrom === TODAY,
+    urgentOnDisk.penaltyFrom,
+  );
+
+  r = await call(`/api/habits/${urgentId}`, { method: 'PATCH', ...json({ urgency: 0 }) });
+  check('urgency can be turned off', r.status === 200 && r.body.urgency === 0 && r.body.penalty === 0);
+  await call(`/api/habits/${urgentId}`, { method: 'DELETE' });
 
   console.log('\nschedule');
   r = await call('/api/habits', { method: 'POST', ...json({ name: 'Weekdays', days: [5, 1, 3, 1] }) });
@@ -324,6 +477,9 @@ try {
     { difficulty: 0 },
     { difficulty: 11 },
     { difficulty: 1.5 },
+    { urgency: -1 },
+    { urgency: 11 },
+    { urgency: 1.5 },
     { days: [] },
     { days: [9] },
   ]) {
@@ -418,9 +574,23 @@ try {
     `${cssThemes} vs ${serverThemes}`,
   );
   check(
-    'palette includes blue and green shades',
-    ['blue', 'teal', 'green', 'lime'].every((id) => cssThemes.includes(id)),
+    'palette includes blue, teal, and violet shades',
+    ['blue', 'teal', 'violet'].every((id) => cssThemes.includes(id)),
     cssThemes.join(', '),
+  );
+  check(
+    'green and red palettes are removed so they do not clash with trend bars',
+    ['green', 'lime', 'rose'].every((id) => !cssThemes.includes(id)),
+    cssThemes.join(', '),
+  );
+  check(
+    'trend charts use green and red instead of theme accents',
+    css.includes('--graph-up:') &&
+      css.includes('--graph-down:') &&
+      /\.ether-bar\s*\{[^}]*var\(--graph-up\)/.test(css) &&
+      /\.ether-bar\.is-negative\s*\{[^}]*var\(--graph-down\)/.test(css) &&
+      /\.habit-card \.habit-chart \.ether-bar\s*\{[^}]*var\(--graph-up\)/.test(css) &&
+      /\.habit-card \.habit-chart \.ether-bar\.is-negative\s*\{[^}]*var\(--graph-down\)/.test(css),
   );
 
   for (const id of cssThemes) {
@@ -500,10 +670,12 @@ try {
     }
   };
 
-  let parsed = parseCase('habit 1 ; 10 ; tu,th');
+  let parsed = parseCase('habit 1 ; 10 ; 3 ; tu,th');
   check(
-    'name and difficulty parsed from semicolons',
-    parsed.value?.name === 'habit 1' && parsed.value?.difficulty === 10,
+    'name, difficulty, and urgency parsed from semicolons',
+    parsed.value?.name === 'habit 1' &&
+      parsed.value?.difficulty === 10 &&
+      parsed.value?.urgency === 3,
     JSON.stringify(parsed),
   );
   check(
@@ -514,6 +686,7 @@ try {
 
   parsed = parseCase('Read 10 pages');
   check('difficulty defaults to 5', parsed.value?.difficulty === 5);
+  check('urgency defaults to 1', parsed.value?.urgency === 1);
   check(
     'schedule defaults to all days',
     JSON.stringify(parsed.value?.days) === JSON.stringify([0, 1, 2, 3, 4, 5, 6]),
@@ -521,40 +694,63 @@ try {
 
   parsed = parseCase('Read 10 pages ; 4');
   check(
-    'difficulty without days keeps every day',
-    parsed.value?.difficulty === 4 && parsed.value?.days.length === 7,
+    'difficulty without urgency keeps every day',
+    parsed.value?.difficulty === 4 &&
+      parsed.value?.urgency === 1 &&
+      parsed.value?.days.length === 7,
   );
 
-  parsed = parseCase('Read 10 pages ;  ; sat,sun');
+  parsed = parseCase('Read 10 pages ; 4 ; 6');
   check(
-    'blank difficulty falls back to 5',
-    parsed.value?.difficulty === 5 && !parsed.value?.days.includes(0) && !parsed.value?.days.includes(6),
+    'urgency is read from the third part',
+    parsed.value?.difficulty === 4 &&
+      parsed.value?.urgency === 6 &&
+      parsed.value?.days.length === 7,
   );
 
-  parsed = parseCase('Read 10 pages ; sat sun');
+  parsed = parseCase('Read 10 pages ;  ;  ; sat,sun');
   check(
-    'non-numeric middle part is read as days',
-    parsed.value?.difficulty === 5 && JSON.stringify(parsed.value?.days) === JSON.stringify([1, 2, 3, 4, 5]),
+    'blank difficulty and urgency fall back to defaults',
+    parsed.value?.difficulty === 5 &&
+      parsed.value?.urgency === 1 &&
+      !parsed.value?.days.includes(0) &&
+      !parsed.value?.days.includes(6),
   );
 
-  parsed = parseCase('  Read   10   pages  ;  7  ;  MON, tues  ');
+  parsed = parseCase('  Read   10   pages  ;  7  ;  2  ;  MON, tues  ');
   check(
     'names and day tokens are normalised',
     parsed.value?.name === 'Read 10 pages' &&
       parsed.value?.difficulty === 7 &&
+      parsed.value?.urgency === 2 &&
       JSON.stringify(parsed.value?.days) === JSON.stringify([0, 3, 4, 5, 6]),
     JSON.stringify(parsed.value),
   );
 
+  parsed = parseCase('Read ; 5 ; 0');
+  check('urgency 0 is allowed and disables penalties', parsed.value?.urgency === 0);
+
+  parsed = parseCase('Read ; 5 ; 10');
+  check('urgency 10 is allowed', parsed.value?.urgency === 10);
+
+  parsed = parseCase('x ; 5 ; mon');
+  check(
+    'days in the urgency slot are rejected',
+    Boolean(parsed.error) && parsed.error.includes('Urgency'),
+    parsed.error,
+  );
+
   for (const [label, raw] of [
     ['empty input', '   '],
-    ['missing name', '; 5 ; mon'],
+    ['missing name', '; 5 ; 3 ; mon'],
     ['difficulty 0', 'x ; 0'],
     ['difficulty 11', 'x ; 11'],
-    ['unknown day', 'x ; 9 ; funday'],
-    ['all days skipped', 'x ; 5 ; mon,tue,wed,thu,fri,sat,sun'],
-    ['too many semicolons', 'x ; 5 ; mon ; extra'],
-    ['days before difficulty', 'x ; mon ; 5'],
+    ['urgency 11', 'x ; 5 ; 11'],
+    ['urgency -1', 'x ; 5 ; -1'],
+    ['unknown day', 'x ; 9 ; 2 ; funday'],
+    ['all days skipped', 'x ; 5 ; 2 ; mon,tue,wed,thu,fri,sat,sun'],
+    ['too many semicolons', 'x ; 5 ; 2 ; mon ; extra'],
+    ['days before difficulty', 'x ; mon'],
     ['long name', `${'x'.repeat(61)} ; 5`],
   ]) {
     parsed = parseCase(raw);
@@ -609,9 +805,11 @@ try {
       js.includes('Reset all habits and ether for ${profile.name}'),
   );
   check(
-    'reset is enabled while ether remains without habits',
-    js.includes('reset.disabled = profile.habits.length === 0 && profile.ether === 0') &&
-      js.includes('const hasEther = profile.ether > 0'),
+    'reset is enabled while ether or penalties remain without habits',
+    js.includes(
+      'profile.habits.length === 0 && profile.ether === 0 && !(profile.penalties > 0)',
+    ) &&
+      js.includes('const hasHistory = profile.ether !== 0 || (profile.penalties || 0) > 0'),
   );
   check(
     'reset wipes the selected profile through the collection endpoint',
@@ -711,8 +909,8 @@ try {
   r = await call(`/api/habits/${alexHabitId}`, { method: 'DELETE' });
   check('another profile habit is not reachable while inactive', r.status === 404);
 
-  r = await call(`/api/profiles/${alexId}`, { method: 'PATCH', ...json({ theme: 'rose' }) });
-  check('profile theme updated', r.status === 200 && r.body.theme === 'rose');
+  r = await call(`/api/profiles/${alexId}`, { method: 'PATCH', ...json({ theme: 'violet' }) });
+  check('profile theme updated', r.status === 200 && r.body.theme === 'violet');
 
   r = await call(`/api/profiles/${alexId}`, { method: 'PATCH', ...json({ name: 'Alex B' }) });
   check('profile renamed', r.status === 200 && r.body.name === 'Alex B');
@@ -727,7 +925,7 @@ try {
   check(
     'profile name, theme, and habits persisted',
     alexOnDisk.name === 'Alex B' &&
-      alexOnDisk.theme === 'rose' &&
+      alexOnDisk.theme === 'violet' &&
       alexOnDisk.habits.length === 1 &&
       alexOnDisk.habits[0].id === alexHabitId &&
       profileRaw.activeProfileId === mineId,
@@ -778,7 +976,11 @@ try {
       r.body.profiles[0].summary.days.length === 30 &&
       typeof r.body.profiles[0].summary.last7 === 'number' &&
       typeof r.body.profiles[0].summary.last30 === 'number' &&
-      r.body.settings.etherFactor === 1,
+      typeof r.body.profiles[0].summary.netLast7 === 'number' &&
+      typeof r.body.profiles[0].summary.penalties === 'number' &&
+      typeof r.body.profiles[0].penalties === 'number' &&
+      r.body.settings.etherFactor === 1 &&
+      r.body.settings.urgencyFactor === 1,
     JSON.stringify(r.body),
   );
   check(
@@ -870,6 +1072,11 @@ try {
     r.status === 200 && r.body.etherFactor === 1,
     JSON.stringify(r.body),
   );
+  check(
+    'settings expose the global urgency factor',
+    r.status === 200 && r.body.urgencyFactor === 1,
+    JSON.stringify(r.body),
+  );
 
   r = await call('/api/habits');
   check(
@@ -881,7 +1088,9 @@ try {
       r.body.ether.days.length === 30 &&
       r.body.ether.days[29].date === TODAY &&
       typeof r.body.ether.last7 === 'number' &&
-      typeof r.body.ether.last30 === 'number',
+      typeof r.body.ether.last30 === 'number' &&
+      typeof r.body.ether.netLast7 === 'number' &&
+      typeof r.body.ether.penaltyLast7 === 'number',
     JSON.stringify(r.body.ether),
   );
   const baselineTotal = r.body.ether.total;
@@ -1001,7 +1210,15 @@ try {
     r.body.habits.find((habit) => habit.id === fourId).reward === 4,
   );
 
-  for (const payload of [{}, { etherFactor: 0 }, { etherFactor: 11 }, { etherFactor: 'abc' }]) {
+  for (const payload of [
+    {},
+    { etherFactor: 0 },
+    { etherFactor: 11 },
+    { etherFactor: 'abc' },
+    { urgencyFactor: 0 },
+    { urgencyFactor: 11 },
+    { urgencyFactor: 'abc' },
+  ]) {
     r = await call('/api/settings', { method: 'PATCH', ...json(payload) });
     check(`settings ${JSON.stringify(payload)} rejected`, r.status === 400, String(r.status));
   }
@@ -1131,6 +1348,7 @@ try {
 
   const etherDisk = JSON.parse(await fs.readFile(dataFile, 'utf8'));
   check('ether factor persisted to disk', etherDisk.settings.etherFactor === 1);
+  check('urgency factor persisted to disk', etherDisk.settings.urgencyFactor === 1);
   check(
     'sound settings persisted to disk',
     etherDisk.settings.sounds &&
@@ -1150,6 +1368,15 @@ try {
     'earnings persisted per completion date',
     mineOnDisk.habits.find((habit) => habit.id === lockId).earnings[TODAY] === 5,
     JSON.stringify(mineOnDisk.habits.find((habit) => habit.id === lockId).earnings),
+  );
+  check(
+    'new habits persist urgency and a penalty window',
+    mineOnDisk.habits.find((habit) => habit.id === lockId).urgency === 1 &&
+      mineOnDisk.habits.find((habit) => habit.id === lockId).penaltyFrom === TODAY,
+    JSON.stringify({
+      urgency: mineOnDisk.habits.find((habit) => habit.id === lockId).urgency,
+      penaltyFrom: mineOnDisk.habits.find((habit) => habit.id === lockId).penaltyFrom,
+    }),
   );
 
   r = await call('/api/profiles', { method: 'POST', ...json({ name: 'Ether two' }) });
@@ -1214,6 +1441,9 @@ try {
       'dashboard-habits',
       'ether-form',
       'ether-factor',
+      'ether-penalties',
+      'urgency-form',
+      'urgency-factor',
     ].every((id) => html.includes(`id="${id}"`)),
   );
   check(
@@ -1228,6 +1458,7 @@ try {
       js.includes('function etherChartNode') &&
       js.includes('profiles.map(dashboardCard)') &&
       js.includes("api('/api/settings'") &&
+      js.includes('function saveUrgencyFactor') &&
       js.includes("api('/api/overview'"),
   );
   check(
@@ -1242,8 +1473,21 @@ try {
     js.includes("DASHBOARD_RANGE_KEY = 'grindwell.dashboardRange'") &&
       js.includes('function storedDashboardRange') &&
       js.includes('function rangeDays') &&
-      js.includes('function rangeEther') &&
+      js.includes('function rangeNet') &&
+      js.includes('function rangePenalty') &&
       js.includes("els.dashboardRange.addEventListener('change'"),
+  );
+  check(
+    'dashboard trends show net ether and penalties',
+    js.includes('statNode(rangeLabel(), rangeNet(summary))') &&
+      js.includes("statNode('Penalties', rangePenalty(summary))") &&
+      js.includes('els.etherPenalties.textContent') &&
+      js.includes('const net = Number(day.net) || 0') &&
+      js.includes("bar.className = 'ether-bar' + (net < 0 ? ' is-negative' : '')") &&
+      js.includes("chart.className =") &&
+      js.includes('has-negative') &&
+      css.includes('.ether-bar.is-negative') &&
+      css.includes('.ether-chart.has-negative'),
   );
   check(
     'dashboard splits ether and habit trends into sub-pages',
@@ -1268,6 +1512,18 @@ try {
       js.includes('function setDashboardView'),
   );
   check(
+    'habit trends split completed and missed into diverging bars',
+    js.includes('function rangeMissed') &&
+      js.includes('Number(day.missed)') &&
+      js.includes('const hasMissed') &&
+      js.includes("chart.className =") &&
+      js.includes('has-negative') &&
+      js.includes("down.className = 'ether-bar is-negative'") &&
+      js.includes("statNode('Missed', missed)") &&
+      css.includes('.ether-day-missed') &&
+      css.includes('.habit-card .habit-chart .ether-bar.is-negative'),
+  );
+  check(
     'dashboard sub-page styles present',
     css.includes('.dashboard-tabs') &&
       css.includes('.dashboard-tab') &&
@@ -1280,6 +1536,16 @@ try {
       js.includes('starRating(habit.difficulty)') &&
       !js.includes('chip-ether') &&
       !js.includes('`+${habit.reward} ether`'),
+  );
+  check(
+    'habit cards show the missed penalty and the editor sets urgency',
+    js.includes('habit.urgency > 0 && habit.penalty > 0') &&
+      js.includes('chip chip-penalty') &&
+      js.includes('`−${habit.penalty} if missed`') &&
+      js.includes("urgencyLabel.textContent = 'Urgency'") &&
+      js.includes('function syncUrgency') &&
+      js.includes('urgency: Number(urgencyInput.value)') &&
+      css.includes('.chip-penalty'),
   );
   check(
     'star styles present',
@@ -1419,7 +1685,7 @@ try {
     );
   }
 
-  r = await call('/api/profiles', { method: 'POST', ...json({ name: 'Shop A', theme: 'lime' }) });
+  r = await call('/api/profiles', { method: 'POST', ...json({ name: 'Shop A', theme: 'violet' }) });
   const shopA = r.body.id;
   r = await call('/api/habits', { method: 'POST', ...json({ name: 'Shop A earn', difficulty: 4 }) });
   const shopAHabit = r.body.id;
@@ -1695,7 +1961,7 @@ try {
   check(
     'buying a shop item does not ask for confirmation',
     !js
-      .slice(js.indexOf('async function buyShopItem'), js.indexOf('/* ---------- settings ---------- */'))
+      .slice(js.indexOf('async function buyShopItem'), js.indexOf('/* ---------- jobs ---------- */'))
       .includes('window.confirm'),
   );
   check(
@@ -1704,10 +1970,10 @@ try {
       js.includes('function ensureAudioContext') &&
       js.includes('window.AudioContext || window.webkitAudioContext') &&
       js
-        .slice(js.indexOf('async function buyShopItem'), js.indexOf('/* ---------- settings ---------- */'))
+        .slice(js.indexOf('async function buyShopItem'), js.indexOf('/* ---------- jobs ---------- */'))
         .includes('ensureAudioContext()') &&
       js
-        .slice(js.indexOf('async function buyShopItem'), js.indexOf('/* ---------- settings ---------- */'))
+        .slice(js.indexOf('async function buyShopItem'), js.indexOf('/* ---------- jobs ---------- */'))
         .includes('playPurchaseSound()'),
   );
   check(
@@ -1813,10 +2079,11 @@ try {
       js.includes('aria-current'),
   );
   check(
-    'dashboard cards keep each profile palette',
+    'dashboard cards keep each profile palette while bars use graph colours',
     css.includes('body[data-page="dashboard"]') &&
-      /\.ether-bar\s*\{[^}]*var\(--accent\)/.test(css) &&
-      css.includes('.dashboard-card .ether-title'),
+      /\.habit-card \.ether-total strong\s*\{[^}]*var\(--accent-text\)/.test(css) &&
+      css.includes('.dashboard-card .ether-title') &&
+      /\.ether-bar\s*\{[^}]*var\(--graph-up\)/.test(css),
   );
 
   const navBlock = css.match(/\.page-nav\s*\{([^}]*)\}/)?.[1] || '';
@@ -1883,6 +2150,11 @@ try {
     Object.keys(resetProfile.retiredEarnings).length === 0,
     JSON.stringify(resetProfile.retiredEarnings),
   );
+  check(
+    'reset persists cleared retired penalties',
+    Object.keys(resetProfile.retiredPenalties).length === 0,
+    JSON.stringify(resetProfile.retiredPenalties),
+  );
 
   r = await call('/api/habits', { method: 'DELETE' });
   check('reset on an empty list is still 204', r.status === 204);
@@ -1891,6 +2163,417 @@ try {
 
   r = await call('/api/habits/does-not-exist/toggle', { method: 'POST', ...json({}) });
   check('unknown habit is 404', r.status === 404);
+
+  console.log('\njobs');
+
+  const eta = 60;
+  check(
+    'job multiplier is 2x at half the ETA',
+    jobOutcome(30 * 60000, eta).multiplier === 2,
+    JSON.stringify(jobOutcome(30 * 60000, eta)),
+  );
+  check(
+    'job multiplier is 1.5x past half but before the ETA',
+    jobOutcome(31 * 60000, eta).multiplier === 1.5,
+    JSON.stringify(jobOutcome(31 * 60000, eta)),
+  );
+  check(
+    'job multiplier is 1x at the ETA and inside the 10% margin',
+    jobOutcome(60 * 60000, eta).multiplier === 1 &&
+      jobOutcome(66 * 60000, eta).multiplier === 1,
+    JSON.stringify([jobOutcome(60 * 60000, eta), jobOutcome(66 * 60000, eta)]),
+  );
+  check(
+    'job multiplier is 0.5x past the margin',
+    jobOutcome(67 * 60000, eta).multiplier === 0.5,
+    JSON.stringify(jobOutcome(67 * 60000, eta)),
+  );
+  check(
+    'job fails past twice the ETA',
+    jobOutcome(121 * 60000, eta).failed === true &&
+      jobOutcome(121 * 60000, eta).multiplier === -0.5,
+    JSON.stringify(jobOutcome(121 * 60000, eta)),
+  );
+  check(
+    'job payouts are signed whole ether',
+    jobPayout(20, 2) === 40 &&
+      jobPayout(20, 1.5) === 30 &&
+      jobPayout(20, 1) === 20 &&
+      jobPayout(20, 0.5) === 10 &&
+      jobPayout(20, -0.5) === -10,
+    JSON.stringify([2, 1.5, 1, 0.5, -0.5].map((factor) => jobPayout(20, factor))),
+  );
+
+  r = await call('/api/profiles', { method: 'POST', ...json({ name: 'Job A', theme: 'blue' }) });
+  const jobA = r.body.id;
+  r = await call('/api/profiles', { method: 'POST', ...json({ name: 'Job B', theme: 'teal' }) });
+  const jobB = r.body.id;
+
+  r = await call('/api/jobs', {
+    method: 'POST',
+    ...json({ title: '  Wash   the van  ', reward: 10, etaMinutes: 60 }),
+  });
+  const firstJob = r.body.job;
+  check(
+    'job create normalises the title',
+    r.status === 201 &&
+      firstJob.title === 'Wash the van' &&
+      firstJob.status === 'inbox' &&
+      firstJob.createdBy === jobB,
+    JSON.stringify(firstJob),
+  );
+
+  r = await call('/api/jobs');
+  check(
+    'new job appears in the inbox',
+    r.body.jobs.inbox.some((job) => job.id === firstJob.id) &&
+      r.body.jobs.inProgress.length === 0,
+    JSON.stringify(r.body.jobs),
+  );
+  check(
+    'job board exposes the limits',
+    r.body.limits.maxInProgress === 3 && r.body.limits.terminalShown === 10,
+    JSON.stringify(r.body.limits),
+  );
+
+  r = await call(`/api/jobs/${firstJob.id}/take?profile=${jobA}`, {
+    method: 'POST',
+    ...json({}),
+  });
+  check(
+    'job can be taken by a profile',
+    r.status === 200 &&
+      r.body.job.status === 'inProgress' &&
+      r.body.job.assignedTo === jobA,
+    `${r.status} ${JSON.stringify(r.body)}`,
+  );
+  check(
+    'job due date uses the ETA',
+    Date.parse(r.body.job.dueAt) - Date.parse(r.body.job.startedAt) === 60 * 60000,
+    `${r.body.job.startedAt} -> ${r.body.job.dueAt}`,
+  );
+
+  r = await call(`/api/jobs/${firstJob.id}/take?profile=${jobB}`, {
+    method: 'POST',
+    ...json({}),
+  });
+  check('a taken job cannot be taken twice', r.status === 409, String(r.status));
+
+  r = await call(`/api/jobs/${firstJob.id}/complete`, { method: 'POST', ...json({}) });
+  check(
+    'a fast job completes at the 2x multiplier',
+    r.status === 200 &&
+      r.body.job.status === 'completed' &&
+      r.body.job.multiplier === 2 &&
+      r.body.job.payout === 20,
+    `${r.status} ${JSON.stringify(r.body.job)}`,
+  );
+
+  r = await call(`/api/habits?profile=${jobA}`);
+  check(
+    'job reward lands in the profile balance',
+    r.body.ether.earned === 20 && r.body.ether.total === 20 && r.body.ether.penalties === 0,
+    JSON.stringify(r.body.ether),
+  );
+
+  r = await call('/api/overview');
+  const jobAOverview = r.body.profiles.find((profile) => profile.id === jobA);
+  check(
+    'job ether shows in the dashboard summary',
+    jobAOverview.summary.earned === 20 &&
+      jobAOverview.summary.today === 20 &&
+      jobAOverview.summary.netToday === 20,
+    JSON.stringify(jobAOverview.summary),
+  );
+
+  r = await call('/api/jobs');
+  check(
+    'completed job appears in the completed box',
+    r.body.jobs.completed[0]?.id === firstJob.id && r.body.jobs.inProgress.length === 0,
+    JSON.stringify(r.body.jobs),
+  );
+
+  r = await call(`/api/jobs/${firstJob.id}`, { method: 'DELETE' });
+  check('completed jobs cannot be deleted', r.status === 409, String(r.status));
+
+  r = await call(`/api/jobs/${firstJob.id}/complete`, { method: 'POST', ...json({}) });
+  check('completed jobs cannot be completed again', r.status === 409, String(r.status));
+
+  r = await call('/api/jobs', {
+    method: 'POST',
+    ...json({ title: 'Throwaway', reward: 5, etaMinutes: 5 }),
+  });
+  const throwaway = r.body.job.id;
+  r = await call(`/api/jobs/${throwaway}`, { method: 'DELETE' });
+  check('an inbox job can be deleted', r.status === 204, String(r.status));
+  r = await call('/api/jobs');
+  check(
+    'deleted inbox job is gone',
+    !r.body.jobs.inbox.some((job) => job.id === throwaway),
+  );
+
+  for (const payload of [
+    {},
+    { title: '   ', reward: 5, etaMinutes: 5 },
+    { title: 'Bad reward', reward: 0, etaMinutes: 5 },
+    { title: 'Bad eta', reward: 5, etaMinutes: 0 },
+    { title: 'Fraction reward', reward: 1.5, etaMinutes: 5 },
+    { title: 'Fraction eta', reward: 5, etaMinutes: 1.5 },
+  ]) {
+    r = await call('/api/jobs', { method: 'POST', ...json(payload) });
+    check(`job create ${JSON.stringify(payload)} rejected`, r.status === 400, String(r.status));
+  }
+
+  const limitJobs = [];
+  for (let index = 0; index < 4; index += 1) {
+    r = await call('/api/jobs', {
+      method: 'POST',
+      ...json({ title: `Limit ${index}`, reward: 5, etaMinutes: 60 }),
+    });
+    limitJobs.push(r.body.job.id);
+  }
+  for (let index = 0; index < 3; index += 1) {
+    r = await call(`/api/jobs/${limitJobs[index]}/take?profile=${jobA}`, {
+      method: 'POST',
+      ...json({}),
+    });
+    check(`job ${index + 1} fits the in-progress limit`, r.status === 200, String(r.status));
+  }
+  r = await call(`/api/jobs/${limitJobs[3]}/take?profile=${jobA}`, {
+    method: 'POST',
+    ...json({}),
+  });
+  check('a fourth in-progress job is rejected', r.status === 400, String(r.status));
+  r = await call(`/api/jobs/${limitJobs[3]}/take?profile=${jobB}`, {
+    method: 'POST',
+    ...json({}),
+  });
+  check('another profile can take the job', r.status === 200, String(r.status));
+
+  for (let index = 0; index < 4; index += 1) {
+    r = await call(`/api/jobs/${limitJobs[index]}/complete`, { method: 'POST', ...json({}) });
+    check(`limit job ${index + 1} completes`, r.status === 200, String(r.status));
+  }
+
+  for (let index = 0; index < 6; index += 1) {
+    r = await call('/api/jobs', {
+      method: 'POST',
+      ...json({ title: `History ${index}`, reward: 5, etaMinutes: 60 }),
+    });
+    const historyId = r.body.job.id;
+    await call(`/api/jobs/${historyId}/take?profile=${jobA}`, {
+      method: 'POST',
+      ...json({}),
+    });
+    await call(`/api/jobs/${historyId}/complete`, { method: 'POST', ...json({}) });
+  }
+
+  r = await call('/api/jobs');
+  check(
+    'the completed box shows only the latest 10',
+    r.body.jobs.completed.length === 10,
+    String(r.body.jobs.completed.length),
+  );
+  check(
+    'older completed jobs are hidden',
+    !r.body.jobs.completed.some((job) => job.id === firstJob.id),
+    JSON.stringify(r.body.jobs.completed.map((job) => job.id)),
+  );
+  check(
+    'the failed box is capped too',
+    r.body.jobs.failed.length <= 10,
+    String(r.body.jobs.failed.length),
+  );
+
+  r = await call('/api/profiles', { method: 'POST', ...json({ name: 'Job C', theme: 'violet' }) });
+  const jobC = r.body.id;
+  r = await call('/api/jobs', {
+    method: 'POST',
+    ...json({ title: 'C job', reward: 5, etaMinutes: 60 }),
+  });
+  const cJob = r.body.job.id;
+  await call(`/api/jobs/${cJob}/take?profile=${jobC}`, { method: 'POST', ...json({}) });
+  r = await call(`/api/profiles/${jobC}`, { method: 'DELETE' });
+  check('deleting a profile succeeds', r.status === 204, String(r.status));
+  r = await call('/api/jobs');
+  const returned = r.body.jobs.inbox.find((job) => job.id === cJob);
+  check(
+    'deleting a profile returns its in-progress job to the inbox',
+    returned &&
+      returned.assignedTo === null &&
+      returned.startedAt === null &&
+      returned.dueAt === null,
+    JSON.stringify(returned),
+  );
+  await call(`/api/jobs/${cJob}`, { method: 'DELETE' });
+
+  r = await call(`/api/habits?profile=${jobA}`);
+  check('job ether is present before reset', r.body.ether.earned > 0, String(r.body.ether.earned));
+  r = await call(`/api/habits?profile=${jobA}`, { method: 'DELETE' });
+  check('reset returns 204 for a job earner', r.status === 204, String(r.status));
+  r = await call(`/api/habits?profile=${jobA}`);
+  check(
+    'reset clears job ether',
+    r.body.ether.earned === 0 && r.body.ether.total === 0,
+    JSON.stringify(r.body.ether),
+  );
+  const jobDisk = JSON.parse(await fs.readFile(dataFile, 'utf8'));
+  const jobAOnDisk = jobDisk.profiles.find((profile) => profile.id === jobA);
+  check(
+    'reset persists cleared job ledgers',
+    Object.keys(jobAOnDisk.jobEarnings).length === 0 &&
+      Object.keys(jobAOnDisk.jobPenalties).length === 0,
+    JSON.stringify({ earnings: jobAOnDisk.jobEarnings, penalties: jobAOnDisk.jobPenalties }),
+  );
+
+  console.log('\njobs frontend');
+
+  r = await call('/jobs');
+  check(
+    'jobs route serves the app',
+    r.status === 200 && String(r.headers.get('content-type')).includes('text/html'),
+    String(r.status),
+  );
+  check(
+    'jobs page has the five boxes',
+    ['page-jobs', 'job-form', 'jobs-inbox', 'jobs-progress', 'jobs-completed', 'jobs-failed'].every(
+      (id) => html.includes(`id="${id}"`),
+    ),
+  );
+  check('jobs page has an acting-as selector', html.includes('id="job-actor"'));
+  check('jobs page loads the job math helper', html.includes('/job-math.js'));
+  check(
+    'jobs frontend renders and polls',
+    js.includes('function renderJobs') &&
+      js.includes('function loadJobs') &&
+      js.includes('refreshJobsQuietly') &&
+      js.includes('/api/jobs'),
+  );
+  check(
+    'jobs support drag and drop plus buttons',
+    js.includes('function wireJobDrop') &&
+      js.includes('draggable = true') &&
+      js.includes('job-complete'),
+  );
+  check(
+    'jobs styling covers profile boxes and outcomes',
+    css.includes('.job-profile-box') &&
+      css.includes('.job-card.is-failed') &&
+      css.includes('.job-outcome.is-success'),
+  );
+
+  console.log('\njob auto-fail');
+
+  const failPort = port + 1;
+  const failDataFile = path.join(tmpDir, 'jobs-fail.json');
+  const overdueStart = new Date(Date.now() - 10 * 60000).toISOString();
+  await fs.writeFile(
+    failDataFile,
+    JSON.stringify({
+      settings: { etherFactor: 1, urgencyFactor: 1 },
+      profiles: [
+        {
+          id: 'fail-profile',
+          name: 'Fail Tester',
+          theme: 'ember',
+          createdAt: new Date().toISOString(),
+          habits: [],
+          retiredEarnings: {},
+          retiredPenalties: {},
+          jobEarnings: {},
+          jobPenalties: {},
+          spentEther: 0,
+        },
+      ],
+      jobs: [
+        {
+          id: 'overdue-job',
+          title: 'Overdue seeded job',
+          reward: 20,
+          etaMinutes: 1,
+          status: 'inProgress',
+          createdBy: 'fail-profile',
+          assignedTo: 'fail-profile',
+          createdAt: overdueStart,
+          startedAt: overdueStart,
+          dueAt: new Date(Date.now() - 9 * 60000).toISOString(),
+          completedAt: null,
+          failedAt: null,
+          multiplier: null,
+          payout: null,
+        },
+      ],
+      shop: { items: [] },
+      activeProfileId: 'fail-profile',
+    }),
+  );
+
+  const failChild = spawn(process.execPath, [path.join(root, 'server.js')], {
+    env: {
+      ...process.env,
+      PORT: String(failPort),
+      HOST: '127.0.0.1',
+      DATA_FILE: failDataFile,
+    },
+    stdio: ['ignore', 'pipe', 'pipe'],
+  });
+  let failLogs = '';
+  failChild.stdout.on('data', (data) => (failLogs += data));
+  failChild.stderr.on('data', (data) => (failLogs += data));
+
+  await new Promise((resolve, reject) => {
+    const timer = setTimeout(
+      () => reject(new Error(`fail server did not start:\n${failLogs}`)),
+      5000,
+    );
+    failChild.stdout.on('data', () => {
+      if (failLogs.includes('listening')) {
+        clearTimeout(timer);
+        resolve();
+      }
+    });
+  });
+
+  try {
+    const failBase = `http://127.0.0.1:${failPort}`;
+    const failCall = async (p, options = {}) => {
+      const res = await fetch(failBase + p, options);
+      const text = await res.text();
+      let body = null;
+      try {
+        body = text ? JSON.parse(text) : null;
+      } catch {
+        body = text;
+      }
+      return { status: res.status, body };
+    };
+
+    let failResult = await failCall('/api/jobs');
+    check(
+      'an overdue job fails automatically on startup',
+      failResult.body.jobs.failed.some(
+        (job) => job.id === 'overdue-job' && job.multiplier === -0.5 && job.payout === -10,
+      ),
+      JSON.stringify(failResult.body.jobs),
+    );
+
+    failResult = await failCall('/api/habits?profile=fail-profile');
+    check(
+      'a failed job records a penalty',
+      failResult.body.ether.penalties === 10 && failResult.body.ether.total === -10,
+      JSON.stringify(failResult.body.ether),
+    );
+
+    const failDisk = JSON.parse(await fs.readFile(failDataFile, 'utf8'));
+    check(
+      'the failed job penalty persists',
+      failDisk.profiles[0].jobPenalties[TODAY] === 10,
+      JSON.stringify(failDisk.profiles[0].jobPenalties),
+    );
+  } finally {
+    failChild.kill('SIGTERM');
+    await new Promise((resolve) => failChild.on('exit', resolve));
+  }
 
   console.log(`\n${failures === 0 ? 'all checks passed' : `${failures} check(s) failed`}`);
 } finally {

@@ -8,6 +8,8 @@ Project tasks for **grindwell**. Check off completed items and add new work belo
 
 ## Done
 
+- [x] Add a shared Jobs page: post a job with an ether reward and minute ETA, claim it into a per-profile in-progress box (max three), complete it for a time-based multiplier, or let it auto-fail into a Failed box with a penalty.
+- [x] Add automatic ether penalties for missed scheduled habits: each habit has an urgency from 0 to 10, a global urgency factor lives in Settings, and the Dashboard shows net ether with negative bars.
 - [x] Add sound configuration to the Settings page for habit completion and shop purchases: include sample sounds and a way to add more sounds.
 - [x] Add a Trends card to the Dashboard that tracks how many habits are completed each day, with both 7-day and 30-day views supported.
 - [x] Make the grindwell app icon configurable by clicking it: include example icons and allow loading more icons.

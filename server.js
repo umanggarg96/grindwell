@@ -4,6 +4,7 @@ const http = require('node:http');
 const fs = require('node:fs/promises');
 const path = require('node:path');
 const crypto = require('node:crypto');
+const { jobOutcome, jobPayout } = require('./public/job-math.js');
 
 const PORT = Number(process.env.PORT) || 3000;
 const HOST = process.env.HOST || '0.0.0.0';
@@ -18,16 +19,38 @@ const MIN_DIFFICULTY = 1;
 const MAX_DIFFICULTY = 10;
 const DEFAULT_DIFFICULTY = 5;
 const DEFAULT_THEME = 'ember';
-const THEME_IDS = ['ember', 'blue', 'teal', 'green', 'lime', 'violet', 'rose'];
+const THEME_IDS = ['ember', 'blue', 'teal', 'violet'];
 const MAX_PROFILES = 20;
 const MAX_SHOP_ITEMS = 100;
 const MAX_ITEM_COST = 1000000;
 const MAX_URL_LENGTH = 500;
+
+// Jobs are shared like the shop. Each profile can only hold a few at a time,
+// and only the newest finished jobs are shown on the board.
+const MAX_JOBS = 500;
+const MAX_JOB_TITLE_LENGTH = 160;
+const MIN_JOB_REWARD = 1;
+const MAX_JOB_REWARD = 1000;
+const MIN_JOB_ETA_MINUTES = 1;
+const MAX_JOB_ETA_MINUTES = 10080;
+const MAX_JOBS_IN_PROGRESS = 3;
+const TERMINAL_JOBS_SHOWN = 10;
+const JOB_STATUSES = ['inbox', 'inProgress', 'completed', 'failed'];
+const FAILURE_MULTIPLIER = -0.5;
 // Ether is a linear reward: max(1, round(difficulty * factor)). One global
 // factor keeps tuning simple; earned ether is stored per completion date.
 const DEFAULT_ETHER_FACTOR = 1;
 const MIN_ETHER_FACTOR = 0.1;
 const MAX_ETHER_FACTOR = 10;
+// Missing a scheduled habit costs max(1, round(urgency * urgencyFactor)).
+// Urgency is separate from difficulty: a simple task can still be costly to miss.
+const DEFAULT_URGENCY = 1;
+const MIN_URGENCY = 0;
+const MAX_URGENCY = 10;
+const DEFAULT_URGENCY_FACTOR = 1;
+const MIN_URGENCY_FACTOR = 0.1;
+const MAX_URGENCY_FACTOR = 10;
+const SETTLE_GUARD_DAYS = 40000;
 // JavaScript weekday numbers: 0 = Sunday ... 6 = Saturday.
 const ALL_DAYS = [0, 1, 2, 3, 4, 5, 6];
 // Built-in sounds are synthesised in the browser; custom ones point at audio URLs.
@@ -54,6 +77,7 @@ let state = {
   settings: defaultSettings(),
   profiles: [],
   shop: { items: [] },
+  jobs: [],
   activeProfileId: null,
 };
 let saveChain = Promise.resolve();
@@ -73,6 +97,46 @@ function dayKey(date = new Date()) {
     String(date.getMonth() + 1).padStart(2, '0'),
     String(date.getDate()).padStart(2, '0'),
   ].join('-');
+}
+
+// Accept only real YYYY-MM-DD keys so bad data cannot create phantom days.
+function dateKeyFromValue(value) {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return null;
+  const [year, month, date] = value.split('-').map(Number);
+  const parsed = new Date(year, month - 1, date);
+  return parsed.getFullYear() === year &&
+    parsed.getMonth() === month - 1 &&
+    parsed.getDate() === date
+    ? dayKey(parsed)
+    : null;
+}
+
+function dateKeyFromTimestamp(value) {
+  if (typeof value !== 'string') return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : dayKey(parsed);
+}
+
+function normalizePenaltyFrom(value, createdAt) {
+  const parsed = dateKeyFromValue(value);
+  const fallback = dateKeyFromTimestamp(createdAt) || dayKey();
+  const key = parsed || fallback;
+  // A future start date would silently postpone penalties; clamp it to today.
+  return key > dayKey() ? dayKey() : key;
+}
+
+// The first day a habit can count as missed in the trends. penaltyFrom can be
+// backdated and resets on edits, while createdAt stops a habit appearing missed
+// before it existed. Use whichever is earlier.
+function habitStartKey(habit) {
+  const created = dateKeyFromTimestamp(habit.createdAt);
+  const penaltyFrom = normalizePenaltyFrom(habit.penaltyFrom, habit.createdAt);
+  return created && created < penaltyFrom ? created : penaltyFrom;
+}
+
+function startOfDayKey(key) {
+  const [year, month, date] = key.split('-').map(Number);
+  return new Date(year, month - 1, date);
 }
 
 function currentStreak(completions, days = ALL_DAYS) {
@@ -159,6 +223,27 @@ function rewardFor(difficulty, factor = DEFAULT_ETHER_FACTOR) {
   return Math.max(1, Math.round(difficulty * factor));
 }
 
+function parseUrgency(value) {
+  if (!Number.isInteger(value)) {
+    throw httpError(400, 'Urgency must be a whole number from 0 to 10.');
+  }
+  if (value < MIN_URGENCY || value > MAX_URGENCY) {
+    throw httpError(400, `Urgency must be between ${MIN_URGENCY} and ${MAX_URGENCY}.`);
+  }
+  return value;
+}
+
+function urgencyOf(habit) {
+  const value = habit.urgency;
+  // Habits created before urgency existed opt out of penalties until edited.
+  return Number.isInteger(value) && value >= MIN_URGENCY && value <= MAX_URGENCY ? value : 0;
+}
+
+function penaltyFor(urgency, factor = DEFAULT_URGENCY_FACTOR) {
+  if (!Number.isInteger(urgency) || urgency <= 0) return 0;
+  return Math.max(1, Math.round(urgency * factor));
+}
+
 function etherFactorOf(value) {
   return Number.isFinite(value) && value >= MIN_ETHER_FACTOR && value <= MAX_ETHER_FACTOR
     ? Math.round(value * 100) / 100
@@ -179,6 +264,26 @@ function parseEtherFactor(value) {
   return Math.round(factor * 100) / 100;
 }
 
+function urgencyFactorOf(value) {
+  return Number.isFinite(value) && value >= MIN_URGENCY_FACTOR && value <= MAX_URGENCY_FACTOR
+    ? Math.round(value * 100) / 100
+    : DEFAULT_URGENCY_FACTOR;
+}
+
+function parseUrgencyFactor(value) {
+  const factor = typeof value === 'number' ? value : Number(value);
+  if (!Number.isFinite(factor)) {
+    throw httpError(400, 'Urgency factor must be a number.');
+  }
+  if (factor < MIN_URGENCY_FACTOR || factor > MAX_URGENCY_FACTOR) {
+    throw httpError(
+      400,
+      `Urgency factor must be between ${MIN_URGENCY_FACTOR} and ${MAX_URGENCY_FACTOR}.`,
+    );
+  }
+  return Math.round(factor * 100) / 100;
+}
+
 function defaultSounds() {
   return { habit: DEFAULT_SOUNDS.habit, purchase: DEFAULT_SOUNDS.purchase, custom: [] };
 }
@@ -188,7 +293,12 @@ function defaultIcon() {
 }
 
 function defaultSettings() {
-  return { etherFactor: DEFAULT_ETHER_FACTOR, sounds: defaultSounds(), icon: defaultIcon() };
+  return {
+    etherFactor: DEFAULT_ETHER_FACTOR,
+    urgencyFactor: DEFAULT_URGENCY_FACTOR,
+    sounds: defaultSounds(),
+    icon: defaultIcon(),
+  };
 }
 
 function normalizeCustomSounds(value) {
@@ -357,9 +467,77 @@ function addEarnings(byDate, earnings) {
   }
 }
 
+function penaltiesOf(habit) {
+  return habit.penalties && typeof habit.penalties === 'object' && !Array.isArray(habit.penalties)
+    ? habit.penalties
+    : {};
+}
+
+// Penalties from deleted habits stay here so deleting never refunds a loss.
+function retiredPenaltiesOf(profile) {
+  return profile.retiredPenalties &&
+    typeof profile.retiredPenalties === 'object' &&
+    !Array.isArray(profile.retiredPenalties)
+    ? profile.retiredPenalties
+    : {};
+}
+
+function normalizePenalties(value) {
+  const source = value && typeof value === 'object' && !Array.isArray(value) ? value : {};
+  const penalties = {};
+  for (const [date, amount] of Object.entries(source)) {
+    const key = dateKeyFromValue(date);
+    if (key && Number.isInteger(amount) && amount > 0) penalties[key] = amount;
+  }
+  return penalties;
+}
+
+function addPenalties(byDate, penalties) {
+  for (const [date, value] of Object.entries(penalties)) {
+    if (!Number.isInteger(value) || value < 1) continue;
+    byDate.set(date, (byDate.get(date) || 0) + value);
+  }
+}
+
+// Job ether lives on the profile so it feeds the same balance, dashboard, and
+// Shop as habit ether. A job records its payout on the day it finished.
+function jobEarningsOf(profile) {
+  return profile.jobEarnings &&
+    typeof profile.jobEarnings === 'object' &&
+    !Array.isArray(profile.jobEarnings)
+    ? profile.jobEarnings
+    : {};
+}
+
+function jobPenaltiesOf(profile) {
+  return profile.jobPenalties &&
+    typeof profile.jobPenalties === 'object' &&
+    !Array.isArray(profile.jobPenalties)
+    ? profile.jobPenalties
+    : {};
+}
+
+function penaltyEther(profile) {
+  let total = 0;
+  for (const penalties of [
+    retiredPenaltiesOf(profile),
+    jobPenaltiesOf(profile),
+    ...(profile.habits || []).map(penaltiesOf),
+  ]) {
+    for (const value of Object.values(penalties)) {
+      if (Number.isInteger(value) && value > 0) total += value;
+    }
+  }
+  return total;
+}
+
 function earnedEther(profile) {
   let total = 0;
-  for (const earnings of [retiredEarningsOf(profile), ...(profile.habits || []).map(earningsOf)]) {
+  for (const earnings of [
+    retiredEarningsOf(profile),
+    jobEarningsOf(profile),
+    ...(profile.habits || []).map(earningsOf),
+  ]) {
     for (const value of Object.values(earnings)) {
       if (Number.isInteger(value) && value > 0) total += value;
     }
@@ -372,15 +550,20 @@ function spentEtherOf(profile) {
 }
 
 function etherBalance(profile) {
-  return earnedEther(profile) - spentEtherOf(profile);
+  return earnedEther(profile) - penaltyEther(profile) - spentEtherOf(profile);
 }
 
 function etherSummary(profile) {
-  const byDate = new Map();
+  const earningsByDate = new Map();
+  const penaltiesByDate = new Map();
   const completionsByDate = new Map();
-  addEarnings(byDate, retiredEarningsOf(profile));
+  addEarnings(earningsByDate, retiredEarningsOf(profile));
+  addPenalties(penaltiesByDate, retiredPenaltiesOf(profile));
+  addEarnings(earningsByDate, jobEarningsOf(profile));
+  addPenalties(penaltiesByDate, jobPenaltiesOf(profile));
   for (const habit of profile.habits || []) {
-    addEarnings(byDate, earningsOf(habit));
+    addEarnings(earningsByDate, earningsOf(habit));
+    addPenalties(penaltiesByDate, penaltiesOf(habit));
     const completions = Array.isArray(habit.completions) ? habit.completions : [];
     for (const date of completions) {
       if (typeof date !== 'string') continue;
@@ -389,28 +572,68 @@ function etherSummary(profile) {
   }
 
   const now = new Date();
-  const days = [];
+  const todayKey = dayKey(now);
+  const dayKeys = [];
   for (let offset = 29; offset >= 0; offset -= 1) {
-    const date = new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset);
-    const key = dayKey(date);
-    days.push({
-      date: key,
-      ether: byDate.get(key) || 0,
-      completed: completionsByDate.get(key) || 0,
-    });
+    dayKeys.push(dayKey(new Date(now.getFullYear(), now.getMonth(), now.getDate() - offset)));
   }
+
+  // A missed day is a scheduled day before today with no completion. Today is
+  // still open, so it never counts as missed yet (matching streaks/penalties).
+  const missedByDate = new Map();
+  for (const habit of profile.habits || []) {
+    const days = daysOf(habit);
+    const completions = new Set(Array.isArray(habit.completions) ? habit.completions : []);
+    const startKey = habitStartKey(habit);
+    for (const key of dayKeys) {
+      if (key >= todayKey || key < startKey) continue;
+      if (!days.includes(startOfDayKey(key).getDay())) continue;
+      if (completions.has(key)) continue;
+      missedByDate.set(key, (missedByDate.get(key) || 0) + 1);
+    }
+  }
+
+  const days = dayKeys.map((key) => {
+    const ether = earningsByDate.get(key) || 0;
+    const penalty = penaltiesByDate.get(key) || 0;
+    return {
+      date: key,
+      ether,
+      penalty,
+      net: ether - penalty,
+      completed: completionsByDate.get(key) || 0,
+      missed: missedByDate.get(key) || 0,
+    };
+  });
+
+  const today = earningsByDate.get(todayKey) || 0;
+  const penaltyToday = penaltiesByDate.get(todayKey) || 0;
+  const last7 = days.slice(-7).reduce((sum, day) => sum + day.ether, 0);
+  const last30 = days.reduce((sum, day) => sum + day.ether, 0);
+  const penaltyLast7 = days.slice(-7).reduce((sum, day) => sum + day.penalty, 0);
+  const penaltyLast30 = days.reduce((sum, day) => sum + day.penalty, 0);
 
   return {
     factor: state.settings.etherFactor,
+    urgencyFactor: state.settings.urgencyFactor,
     total: etherBalance(profile),
     earned: earnedEther(profile),
+    penalties: penaltyEther(profile),
     spent: spentEtherOf(profile),
-    today: byDate.get(dayKey(now)) || 0,
-    last7: days.slice(-7).reduce((sum, day) => sum + day.ether, 0),
-    last30: days.reduce((sum, day) => sum + day.ether, 0),
-    completedToday: completionsByDate.get(dayKey(now)) || 0,
+    today,
+    last7,
+    last30,
+    penaltyToday,
+    penaltyLast7,
+    penaltyLast30,
+    netToday: today - penaltyToday,
+    netLast7: last7 - penaltyLast7,
+    netLast30: last30 - penaltyLast30,
+    completedToday: completionsByDate.get(todayKey) || 0,
     completedLast7: days.slice(-7).reduce((sum, day) => sum + day.completed, 0),
     completedLast30: days.reduce((sum, day) => sum + day.completed, 0),
+    missedLast7: days.slice(-7).reduce((sum, day) => sum + day.missed, 0),
+    missedLast30: days.reduce((sum, day) => sum + day.missed, 0),
     days,
   };
 }
@@ -421,17 +644,20 @@ function toPublic(habit) {
   const today = new Date();
   const todayKey = dayKey(today);
   const difficulty = difficultyOf(habit);
+  const urgency = urgencyOf(habit);
   const earned = earningsOf(habit)[todayKey];
   return {
     id: habit.id,
     name: habit.name,
     createdAt: habit.createdAt,
     difficulty,
+    urgency,
     days,
     dueToday: days.includes(today.getDay()),
     doneToday: completions.includes(todayKey),
     streak: currentStreak(completions, days),
     reward: rewardFor(difficulty, state.settings.etherFactor),
+    penalty: penaltyFor(urgency, state.settings.urgencyFactor),
     earnedToday: Number.isInteger(earned) && earned > 0 ? earned : 0,
   };
 }
@@ -459,6 +685,9 @@ function makeProfile(name, theme = DEFAULT_THEME) {
     createdAt: new Date().toISOString(),
     habits: [],
     retiredEarnings: {},
+    retiredPenalties: {},
+    jobEarnings: {},
+    jobPenalties: {},
     spentEther: 0,
   };
 }
@@ -479,6 +708,7 @@ function toPublicProfile(profile) {
     habitCount: (profile.habits || []).length,
     ether: etherBalance(profile),
     earned: earnedEther(profile),
+    penalties: penaltyEther(profile),
     spent: spentEtherOf(profile),
   };
 }
@@ -520,9 +750,22 @@ function normalizeHabit(habit, factor = DEFAULT_ETHER_FACTOR) {
         : rewardFor(difficultyOf(habit), factor);
   }
 
+  // Habits created before urgency existed default to 0, so they never collect
+  // retroactive penalties. New habits set urgency explicitly on creation.
+  const urgency =
+    Number.isInteger(habit.urgency) &&
+    habit.urgency >= MIN_URGENCY &&
+    habit.urgency <= MAX_URGENCY
+      ? habit.urgency
+      : 0;
+  const penaltyFrom = normalizePenaltyFrom(habit.penaltyFrom, habit.createdAt);
+  const penalties = normalizePenalties(habit.penalties);
+
   const earningsChanged =
     Object.keys(existing).length !== Object.keys(earnings).length ||
     Object.entries(earnings).some(([date, value]) => existing[date] !== value);
+  const penaltiesChanged =
+    JSON.stringify(penalties) !== JSON.stringify(habit.penalties || {});
 
   const changed =
     !Array.isArray(habit.days) ||
@@ -531,9 +774,15 @@ function normalizeHabit(habit, factor = DEFAULT_ETHER_FACTOR) {
     !Array.isArray(habit.completions) ||
     habit.completions.length !== completions.length ||
     habit.completions.some((date, index) => date !== completions[index]) ||
+    habit.urgency !== urgency ||
+    habit.penaltyFrom !== penaltyFrom ||
+    penaltiesChanged ||
     earningsChanged;
 
-  return { habit: { ...habit, days, completions, earnings }, changed };
+  return {
+    habit: { ...habit, days, completions, earnings, urgency, penaltyFrom, penalties },
+    changed,
+  };
 }
 
 /* ---------- shop ---------- */
@@ -772,6 +1021,298 @@ function purchaseShopItem(item) {
   return contributions;
 }
 
+/* ---------- jobs ---------- */
+
+function jobsOf() {
+  if (!Array.isArray(state.jobs)) state.jobs = [];
+  return state.jobs;
+}
+
+function findJob(id) {
+  return jobsOf().find((job) => job.id === id) || null;
+}
+
+function wholeNumber(value) {
+  const number =
+    typeof value === 'number' ? value : typeof value === 'string' ? Number(value) : NaN;
+  return Number.isFinite(number) ? number : NaN;
+}
+
+function parseJobTitle(value) {
+  const title = typeof value === 'string' ? value.trim().replace(/\s+/g, ' ') : '';
+  if (!title) throw httpError(400, 'Give the job a title.');
+  if (title.length > MAX_JOB_TITLE_LENGTH) {
+    throw httpError(400, `Keep job text under ${MAX_JOB_TITLE_LENGTH} characters.`);
+  }
+  return title;
+}
+
+function parseJobReward(value) {
+  const reward = wholeNumber(value);
+  if (!Number.isInteger(reward) || reward < MIN_JOB_REWARD || reward > MAX_JOB_REWARD) {
+    throw httpError(
+      400,
+      `Reward must be a whole number from ${MIN_JOB_REWARD} to ${MAX_JOB_REWARD}.`,
+    );
+  }
+  return reward;
+}
+
+function parseJobEta(value) {
+  const eta = wholeNumber(value);
+  if (
+    !Number.isInteger(eta) ||
+    eta < MIN_JOB_ETA_MINUTES ||
+    eta > MAX_JOB_ETA_MINUTES
+  ) {
+    throw httpError(
+      400,
+      `ETA must be a whole number of minutes from ${MIN_JOB_ETA_MINUTES} to ${MAX_JOB_ETA_MINUTES}.`,
+    );
+  }
+  return eta;
+}
+
+function jobTimestamp(value) {
+  if (typeof value !== 'string') return null;
+  const parsed = new Date(value);
+  return Number.isNaN(parsed.getTime()) ? null : parsed.toISOString();
+}
+
+function dueAtFrom(startedAt, etaMinutes) {
+  return new Date(Date.parse(startedAt) + etaMinutes * 60000).toISOString();
+}
+
+// Repairs a job loaded from disk. In-progress jobs with no valid owner fall
+// back to the inbox so they cannot get stuck in a deleted profile's box.
+function normalizeJob(raw, profileIds) {
+  if (!raw || typeof raw.id !== 'string' || !raw.id) return null;
+
+  const title = typeof raw.title === 'string' ? raw.title.trim().replace(/\s+/g, ' ') : '';
+  if (!title || title.length > MAX_JOB_TITLE_LENGTH) return null;
+
+  const reward = wholeNumber(raw.reward);
+  if (!Number.isInteger(reward) || reward < MIN_JOB_REWARD || reward > MAX_JOB_REWARD) {
+    return null;
+  }
+  const etaMinutes = wholeNumber(raw.etaMinutes);
+  if (
+    !Number.isInteger(etaMinutes) ||
+    etaMinutes < MIN_JOB_ETA_MINUTES ||
+    etaMinutes > MAX_JOB_ETA_MINUTES
+  ) {
+    return null;
+  }
+
+  const createdBy = typeof raw.createdBy === 'string' ? raw.createdBy : null;
+  let assignedTo = typeof raw.assignedTo === 'string' ? raw.assignedTo : null;
+  const createdAt = jobTimestamp(raw.createdAt) || new Date().toISOString();
+
+  let status = JOB_STATUSES.includes(raw.status) ? raw.status : 'inbox';
+  let startedAt = jobTimestamp(raw.startedAt);
+  let dueAt = jobTimestamp(raw.dueAt);
+  let completedAt = jobTimestamp(raw.completedAt);
+  let failedAt = jobTimestamp(raw.failedAt);
+  let multiplier = typeof raw.multiplier === 'number' ? raw.multiplier : null;
+  let payout = Number.isInteger(raw.payout) ? raw.payout : null;
+
+  if (status === 'inProgress') {
+    if (!startedAt || !assignedTo || !profileIds.has(assignedTo)) {
+      status = 'inbox';
+    } else if (!dueAt) {
+      dueAt = dueAtFrom(startedAt, etaMinutes);
+    }
+  }
+
+  if (status === 'inbox') {
+    assignedTo = null;
+    startedAt = null;
+    dueAt = null;
+    completedAt = null;
+    failedAt = null;
+    multiplier = null;
+    payout = null;
+  } else if (status === 'completed') {
+    completedAt = completedAt || startedAt || createdAt;
+    if (![0.5, 1, 1.5, 2].includes(multiplier)) multiplier = 1;
+    if (!Number.isInteger(payout) || payout < 1) payout = jobPayout(reward, multiplier);
+    if (!dueAt && startedAt) dueAt = dueAtFrom(startedAt, etaMinutes);
+    failedAt = null;
+  } else if (status === 'failed') {
+    failedAt = failedAt || new Date().toISOString();
+    multiplier = FAILURE_MULTIPLIER;
+    if (!Number.isInteger(payout) || payout > -1) {
+      payout = jobPayout(reward, FAILURE_MULTIPLIER);
+    }
+    if (!dueAt && startedAt) dueAt = dueAtFrom(startedAt, etaMinutes);
+    completedAt = null;
+  }
+
+  return {
+    id: raw.id,
+    title,
+    reward,
+    etaMinutes,
+    status,
+    createdBy,
+    assignedTo,
+    createdAt,
+    startedAt,
+    dueAt,
+    completedAt,
+    failedAt,
+    multiplier,
+    payout,
+  };
+}
+
+function toPublicJob(job) {
+  return {
+    id: job.id,
+    title: job.title,
+    reward: job.reward,
+    etaMinutes: job.etaMinutes,
+    status: job.status,
+    createdBy: job.createdBy,
+    assignedTo: job.assignedTo,
+    createdAt: job.createdAt,
+    startedAt: job.startedAt,
+    dueAt: job.dueAt,
+    completedAt: job.completedAt,
+    failedAt: job.failedAt,
+    multiplier: job.multiplier,
+    payout: job.payout,
+  };
+}
+
+function newestFirst(a, b, field) {
+  return (Date.parse(b[field]) || 0) - (Date.parse(a[field]) || 0);
+}
+
+// The board only needs open work plus the newest finished jobs. Older terminal
+// jobs stay in data.json as history but are not sent to the client.
+function publicJobs() {
+  const jobs = jobsOf();
+  const completed = jobs
+    .filter((job) => job.status === 'completed')
+    .sort((a, b) => newestFirst(a, b, 'completedAt'))
+    .slice(0, TERMINAL_JOBS_SHOWN);
+  const failed = jobs
+    .filter((job) => job.status === 'failed')
+    .sort((a, b) => newestFirst(a, b, 'failedAt'))
+    .slice(0, TERMINAL_JOBS_SHOWN);
+
+  return {
+    inbox: jobs
+      .filter((job) => job.status === 'inbox')
+      .sort((a, b) => newestFirst(a, b, 'createdAt'))
+      .map(toPublicJob),
+    inProgress: jobs
+      .filter((job) => job.status === 'inProgress')
+      .sort((a, b) => newestFirst(a, b, 'startedAt'))
+      .map(toPublicJob),
+    completed: completed.map(toPublicJob),
+    failed: failed.map(toPublicJob),
+  };
+}
+
+function jobBoardPayload() {
+  return {
+    today: dayKey(),
+    now: new Date().toISOString(),
+    activeProfileId: activeProfile().id,
+    profiles: state.profiles.map(toPublicProfile),
+    jobs: publicJobs(),
+    limits: {
+      maxInProgress: MAX_JOBS_IN_PROGRESS,
+      terminalShown: TERMINAL_JOBS_SHOWN,
+    },
+  };
+}
+
+function jobsInProgressFor(profile) {
+  return jobsOf().filter(
+    (job) => job.status === 'inProgress' && job.assignedTo === profile.id,
+  ).length;
+}
+
+function jobElapsedOutcome(job, now = Date.now()) {
+  const started = job.startedAt ? Date.parse(job.startedAt) : NaN;
+  if (!Number.isFinite(started)) return { multiplier: null, failed: false };
+  return jobOutcome(now - started, job.etaMinutes);
+}
+
+function failJob(job, now = Date.now()) {
+  const penalty = Math.abs(jobPayout(job.reward, FAILURE_MULTIPLIER));
+  job.status = 'failed';
+  job.failedAt = new Date(now).toISOString();
+  job.multiplier = FAILURE_MULTIPLIER;
+  job.payout = -penalty;
+
+  const profile = findProfile(job.assignedTo);
+  if (profile) {
+    const ledger = { ...jobPenaltiesOf(profile) };
+    const key = dayKey(new Date(now));
+    ledger[key] = (ledger[key] || 0) + penalty;
+    profile.jobPenalties = ledger;
+  }
+}
+
+// Like habit penalties, job failures are settled lazily: at startup and before
+// every non-health API request. A job past twice its ETA becomes a failure.
+function settleJobs(now = Date.now()) {
+  let changed = false;
+  for (const job of jobsOf()) {
+    if (job.status !== 'inProgress') continue;
+    if (!jobElapsedOutcome(job, now).failed) continue;
+    failJob(job, now);
+    changed = true;
+  }
+  return changed;
+}
+
+/* ---------- penalties ---------- */
+
+// Walk every scheduled day since penaltyFrom up to yesterday. Recorded days are
+// never recalculated, so changing the urgency factor or a habit's urgency only
+// affects future misses. Settlement runs before every non-health API request.
+function settleHabit(habit, todayKey = dayKey()) {
+  if (urgencyOf(habit) <= 0) return false;
+
+  const days = daysOf(habit);
+  const completions = new Set(Array.isArray(habit.completions) ? habit.completions : []);
+  const existing = normalizePenalties(habit.penalties);
+  const penalties = { ...existing };
+  const amount = penaltyFor(urgencyOf(habit), state.settings.urgencyFactor);
+  const end = startOfDayKey(todayKey);
+  let cursor = startOfDayKey(normalizePenaltyFrom(habit.penaltyFrom, habit.createdAt));
+  let changed = false;
+  let guard = 0;
+
+  while (cursor < end && guard < SETTLE_GUARD_DAYS) {
+    const key = dayKey(cursor);
+    if (days.includes(cursor.getDay()) && !completions.has(key) && !penalties[key]) {
+      penalties[key] = amount;
+      changed = true;
+    }
+    cursor = new Date(cursor.getFullYear(), cursor.getMonth(), cursor.getDate() + 1);
+    guard += 1;
+  }
+
+  if (changed) habit.penalties = penalties;
+  return changed;
+}
+
+function settleAll() {
+  let changed = false;
+  for (const profile of state.profiles) {
+    for (const habit of profile.habits || []) {
+      if (settleHabit(habit)) changed = true;
+    }
+  }
+  return changed;
+}
+
 /* ---------- persistence ---------- */
 
 async function loadState() {
@@ -784,6 +1325,10 @@ async function loadState() {
       const profiles = [];
       const etherFactor = etherFactorOf(parsed.settings && parsed.settings.etherFactor);
       if (etherFactor !== (parsed.settings && parsed.settings.etherFactor)) changed = true;
+      const urgencyFactor = urgencyFactorOf(
+        parsed.settings && parsed.settings.urgencyFactor,
+      );
+      if (urgencyFactor !== (parsed.settings && parsed.settings.urgencyFactor)) changed = true;
       const sounds = normalizeSounds(parsed.settings && parsed.settings.sounds);
       if (JSON.stringify(sounds) !== JSON.stringify(parsed.settings && parsed.settings.sounds)) {
         changed = true;
@@ -814,6 +1359,18 @@ async function loadState() {
             ([date, amount]) => profile.retiredEarnings[date] !== amount,
           );
         if (retiredChanged) changed = true;
+        const retiredPenalties = normalizePenalties(profile.retiredPenalties);
+        if (JSON.stringify(retiredPenalties) !== JSON.stringify(profile.retiredPenalties)) {
+          changed = true;
+        }
+        const jobEarnings = normalizeRetiredEarnings(profile.jobEarnings);
+        if (JSON.stringify(jobEarnings) !== JSON.stringify(profile.jobEarnings)) {
+          changed = true;
+        }
+        const jobPenalties = normalizePenalties(profile.jobPenalties);
+        if (JSON.stringify(jobPenalties) !== JSON.stringify(profile.jobPenalties)) {
+          changed = true;
+        }
         const spentEther =
           Number.isInteger(profile.spentEther) && profile.spentEther > 0
             ? profile.spentEther
@@ -826,7 +1383,17 @@ async function loadState() {
         if (theme !== profile.theme || name !== profile.name || !Array.isArray(profile.habits)) {
           changed = true;
         }
-        profiles.push({ ...profile, name, theme, habits, retiredEarnings, spentEther });
+        profiles.push({
+          ...profile,
+          name,
+          theme,
+          habits,
+          retiredEarnings,
+          retiredPenalties,
+          jobEarnings,
+          jobPenalties,
+          spentEther,
+        });
       }
 
       if (profiles.length === 0) {
@@ -843,10 +1410,17 @@ async function loadState() {
       const shop = normalizeShop(parsed.shop, profileIds);
       if (shop.changed) changed = true;
 
+      const rawJobs = Array.isArray(parsed.jobs) ? parsed.jobs : [];
+      const jobs = rawJobs
+        .map((job) => normalizeJob(job, profileIds))
+        .filter(Boolean);
+      if (jobs.length !== rawJobs.length) changed = true;
+
       state = {
-        settings: { etherFactor, sounds, icon },
+        settings: { etherFactor, urgencyFactor, sounds, icon },
         profiles,
         shop: shop.shop,
+        jobs,
         activeProfileId,
       };
       if (changed) await saveState();
@@ -860,10 +1434,21 @@ async function loadState() {
         (habit) => normalizeHabit(habit, DEFAULT_ETHER_FACTOR).habit,
       );
     }
+    const profileIds = new Set([profile.id]);
+    const jobs = (parsed && Array.isArray(parsed.jobs) ? parsed.jobs : [])
+      .map((raw) => {
+        const migrated = { ...raw, createdBy: profile.id };
+        if (migrated.status === 'inProgress' && !migrated.assignedTo) {
+          migrated.assignedTo = profile.id;
+        }
+        return normalizeJob(migrated, profileIds);
+      })
+      .filter(Boolean);
     state = {
       settings: defaultSettings(),
       profiles: [profile],
       shop: { items: [] },
+      jobs,
       activeProfileId: profile.id,
     };
     await saveState();
@@ -877,6 +1462,7 @@ async function loadState() {
         settings: defaultSettings(),
         profiles: [profile],
         shop: state.shop && Array.isArray(state.shop.items) ? state.shop : { items: [] },
+        jobs: state.jobs && Array.isArray(state.jobs) ? state.jobs : [],
         activeProfileId: profile.id,
       };
       await saveState();
@@ -940,7 +1526,7 @@ function readJson(req) {
 }
 
 // Client-side pages share one document; these clean URLs all serve index.html.
-const APP_ROUTES = new Set(['/dashboard', '/settings', '/shop']);
+const APP_ROUTES = new Set(['/dashboard', '/settings', '/shop', '/jobs']);
 
 function resolvePublicPath(pathname) {
   let decoded;
@@ -996,6 +1582,12 @@ async function handleApi(req, res, pathname, url) {
     return sendJson(res, 200, { ok: true, today: dayKey() });
   }
 
+  // Missed scheduled days and overdue jobs are settled lazily, before any
+  // read or write.
+  const habitsChanged = settleAll();
+  const jobsChanged = settleJobs();
+  if (habitsChanged || jobsChanged) await saveState();
+
   if (pathname === '/api/overview') {
     if (req.method !== 'GET') throw httpError(405, 'Method not allowed.');
     return sendJson(res, 200, {
@@ -1017,6 +1609,9 @@ async function handleApi(req, res, pathname, url) {
       const updates = {};
       if (body.etherFactor !== undefined) {
         updates.etherFactor = parseEtherFactor(body.etherFactor);
+      }
+      if (body.urgencyFactor !== undefined) {
+        updates.urgencyFactor = parseUrgencyFactor(body.urgencyFactor);
       }
       if (body.sounds !== undefined) {
         updates.sounds = parseSoundsUpdate(body.sounds);
@@ -1153,6 +1748,15 @@ async function handleApi(req, res, pathname, url) {
       for (const item of shopItemsOf()) {
         item.excludedProfiles = (item.excludedProfiles || []).filter((id) => id !== profile.id);
       }
+      // Work a deleted profile had claimed goes back to the inbox so someone
+      // else can take it. Finished jobs stay in history.
+      for (const job of jobsOf()) {
+        if (job.status !== 'inProgress' || job.assignedTo !== profile.id) continue;
+        job.status = 'inbox';
+        job.assignedTo = null;
+        job.startedAt = null;
+        job.dueAt = null;
+      }
       if (state.activeProfileId === profile.id) {
         state.activeProfileId = state.profiles[0].id;
       }
@@ -1240,6 +1844,120 @@ async function handleApi(req, res, pathname, url) {
     throw httpError(405, 'Method not allowed.');
   }
 
+  if (pathname === '/api/jobs') {
+    if (req.method === 'GET') return sendJson(res, 200, jobBoardPayload());
+
+    if (req.method === 'POST') {
+      const body = await readJson(req);
+      if (jobsOf().length >= MAX_JOBS) {
+        throw httpError(400, 'The job board is full. Finish or remove a job first.');
+      }
+      const job = {
+        id: crypto.randomUUID(),
+        title: parseJobTitle(body.title),
+        reward: parseJobReward(body.reward),
+        etaMinutes: parseJobEta(body.etaMinutes),
+        status: 'inbox',
+        createdBy: activeProfile().id,
+        assignedTo: null,
+        createdAt: new Date().toISOString(),
+        startedAt: null,
+        dueAt: null,
+        completedAt: null,
+        failedAt: null,
+        multiplier: null,
+        payout: null,
+      };
+      jobsOf().push(job);
+      await saveState();
+      return sendJson(res, 201, { job: toPublicJob(job), jobs: publicJobs() });
+    }
+
+    throw httpError(405, 'Method not allowed.');
+  }
+
+  const takeJobMatch = pathname.match(/^\/api\/jobs\/([\w-]+)\/take$/);
+  if (takeJobMatch) {
+    if (req.method !== 'POST') throw httpError(405, 'Method not allowed.');
+    const job = findJob(takeJobMatch[1]);
+    if (!job) throw httpError(404, 'Job not found.');
+    const profile = profileForRequest(url);
+    if (job.status === 'inProgress') throw httpError(409, 'Someone already took this job.');
+    if (job.status !== 'inbox') throw httpError(409, 'This job is already finished.');
+    if (jobsInProgressFor(profile) >= MAX_JOBS_IN_PROGRESS) {
+      throw httpError(
+        400,
+        `${profile.name} already has ${MAX_JOBS_IN_PROGRESS} jobs in progress.`,
+      );
+    }
+    const now = new Date();
+    job.status = 'inProgress';
+    job.assignedTo = profile.id;
+    job.startedAt = now.toISOString();
+    job.dueAt = dueAtFrom(job.startedAt, job.etaMinutes);
+    await saveState();
+    return sendJson(res, 200, {
+      job: toPublicJob(job),
+      jobs: publicJobs(),
+      profiles: state.profiles.map(toPublicProfile),
+    });
+  }
+
+  const completeJobMatch = pathname.match(/^\/api\/jobs\/([\w-]+)\/complete$/);
+  if (completeJobMatch) {
+    if (req.method !== 'POST') throw httpError(405, 'Method not allowed.');
+    const job = findJob(completeJobMatch[1]);
+    if (!job) throw httpError(404, 'Job not found.');
+    if (job.status !== 'inProgress') throw httpError(409, 'This job is not in progress.');
+
+    const now = Date.now();
+    const outcome = jobElapsedOutcome(job, now);
+    if (outcome.failed || outcome.multiplier === null) {
+      failJob(job, now);
+      await saveState();
+      throw httpError(409, 'This job passed its deadline and failed.');
+    }
+
+    const payout = jobPayout(job.reward, outcome.multiplier);
+    job.status = 'completed';
+    job.completedAt = new Date(now).toISOString();
+    job.multiplier = outcome.multiplier;
+    job.payout = payout;
+
+    const profile = findProfile(job.assignedTo);
+    if (profile) {
+      const ledger = { ...jobEarningsOf(profile) };
+      const key = dayKey(new Date(now));
+      ledger[key] = (ledger[key] || 0) + payout;
+      profile.jobEarnings = ledger;
+    }
+
+    await saveState();
+    return sendJson(res, 200, {
+      job: toPublicJob(job),
+      jobs: publicJobs(),
+      profiles: state.profiles.map(toPublicProfile),
+    });
+  }
+
+  const jobMatch = pathname.match(/^\/api\/jobs\/([\w-]+)$/);
+  if (jobMatch) {
+    const job = findJob(jobMatch[1]);
+    if (!job) throw httpError(404, 'Job not found.');
+
+    if (req.method === 'DELETE') {
+      if (job.status !== 'inbox') {
+        throw httpError(409, 'Only jobs in the inbox can be removed.');
+      }
+      state.jobs = jobsOf().filter((entry) => entry.id !== job.id);
+      await saveState();
+      res.writeHead(204, { 'Cache-Control': 'no-store' });
+      return res.end();
+    }
+
+    throw httpError(405, 'Method not allowed.');
+  }
+
   // Every habit route below applies to ?profile=<id>, or the active profile.
   const profile = profileForRequest(url);
   if (pathname === '/api/habits') {
@@ -1265,9 +1983,12 @@ async function handleApi(req, res, pathname, url) {
         name: parseName(body.name),
         createdAt: new Date().toISOString(),
         difficulty: body.difficulty === undefined ? DEFAULT_DIFFICULTY : parseDifficulty(body.difficulty),
+        urgency: body.urgency === undefined ? DEFAULT_URGENCY : parseUrgency(body.urgency),
         days: parseDays(body.days),
         completions: [],
         earnings: {},
+        penalties: {},
+        penaltyFrom: dayKey(),
       };
       profile.habits.push(habit);
       await saveState();
@@ -1277,6 +1998,9 @@ async function handleApi(req, res, pathname, url) {
     if (req.method === 'DELETE') {
       profile.habits = [];
       profile.retiredEarnings = {};
+      profile.retiredPenalties = {};
+      profile.jobEarnings = {};
+      profile.jobPenalties = {};
       profile.spentEther = 0;
       await saveState();
       res.writeHead(204, { 'Cache-Control': 'no-store' });
@@ -1336,13 +2060,19 @@ async function handleApi(req, res, pathname, url) {
 
       if (body.name !== undefined) updates.name = parseName(body.name);
       if (body.difficulty !== undefined) updates.difficulty = parseDifficulty(body.difficulty);
+      if (body.urgency !== undefined) updates.urgency = parseUrgency(body.urgency);
       if (body.days !== undefined) updates.days = parseDays(body.days);
 
       if (Object.keys(updates).length === 0) {
         throw httpError(400, 'Nothing to update.');
       }
 
+      // Settlement already ran for this request, so past misses keep their old
+      // charge. Restarting the window here prevents retroactive re-billing.
+      const resetsPenaltyWindow =
+        updates.urgency !== undefined || updates.days !== undefined;
       Object.assign(habit, updates);
+      if (resetsPenaltyWindow) habit.penaltyFrom = dayKey();
       await saveState();
       return sendJson(res, 200, toPublic(habit));
     }
@@ -1354,6 +2084,13 @@ async function handleApi(req, res, pathname, url) {
         retired[date] = (retired[date] || 0) + amount;
       }
       profile.retiredEarnings = retired;
+      // Deleting a habit keeps the penalties it already caused, just like ether.
+      const retiredPenalties = { ...retiredPenaltiesOf(profile) };
+      for (const [date, amount] of Object.entries(penaltiesOf(habit))) {
+        if (!Number.isInteger(amount) || amount < 1) continue;
+        retiredPenalties[date] = (retiredPenalties[date] || 0) + amount;
+      }
+      profile.retiredPenalties = retiredPenalties;
       profile.habits = profile.habits.filter((item) => item.id !== habit.id);
       await saveState();
       res.writeHead(204, { 'Cache-Control': 'no-store' });
@@ -1389,7 +2126,11 @@ const server = http.createServer(async (req, res) => {
   }
 });
 
-loadState().then(() => {
+loadState().then(async () => {
+  // Record any misses or failed jobs that happened while the server was offline.
+  const settledHabits = settleAll();
+  const settledJobs = settleJobs();
+  if (settledHabits || settledJobs) await saveState();
   server.listen(PORT, HOST, () => {
     console.log(`grindwell listening on http://localhost:${PORT}`);
     console.log(`data file: ${DATA_FILE}`);

@@ -1,6 +1,6 @@
 # grindwell
 
-A tiny, zero-dependency habit tracker. One job: mark whether you did each habit **today**. Habits carry a difficulty from 1 to 10 and a weekly schedule (daily by default), and streaks are tracked because they come for free once you store completed dates. Completing a habit also earns **ether**, a configurable reward based on difficulty, with a per-day dashboard. Several people can share one server: each **profile** has its own habits, progress, ether balance, and colour theme. Earned ether can be spent in a shared **Shop** on rewards that anyone can add.
+A tiny, zero-dependency habit tracker. One job: mark whether you did each habit **today**. Habits carry a difficulty from 1 to 10, an urgency from 0 to 10, and a weekly schedule (daily by default), and streaks are tracked because they come for free once you store completed dates. Completing a habit earns **ether** based on difficulty, while missing a scheduled habit costs ether based on urgency. Several people can share one server: each **profile** has its own habits, progress, ether balance, and colour theme. Earned ether can be spent in a shared **Shop** on rewards that anyone can add.
 
 Built to live on a homelab. No accounts, no database server, no build step — just Node and one JSON file.
 
@@ -40,24 +40,29 @@ npm run dev
 
 ## Adding habits
 
-Type the habit name in the box, optionally followed by a difficulty and the days to skip:
+Type the habit name in the box, optionally followed by a difficulty, an urgency, and the days to skip:
 
 ```text
-Read 10 pages ; 6 ; sat,sun
+Read 10 pages ; 6 ; 3 ; sat,sun
 Stretch ; 2
 Meditate
 ```
 
-- **Difficulty** is a whole number from 1 to 10 and defaults to **5**. It is shown on each habit
-  card as stars out of five: difficulty 2 is one star, 3 is one and a half, and 10 is five.
+- **Difficulty** is a whole number from 1 to 10 and defaults to **5**. It sets the reward and is shown
+  on each habit card as stars out of five: difficulty 2 is one star, 3 is one and a half, and 10 is
+  five stars.
+- **Urgency** is a whole number from 0 to 10 and defaults to **1**. It sets the penalty for missing a
+  scheduled day; `0` disables penalties. A habit card shows a `−N if missed` chip when urgency is
+  above zero.
 - **Days** are the days you want to *skip* (rest days): `mo`, `tu`, `we`, `th`, `fr`, `sa`, `su`
   (three-letter and full names work too), separated by commas and/or spaces. With no days, the
   habit runs every day.
-- So `Read 10 pages ; 6 ; sat,sun` creates a difficulty-6 habit that is scheduled Monday to
-  Friday. `Stretch ; 2` is difficulty 2, daily.
-- `Stretch ; sat,sun` also works — a non-numeric middle part is read as days.
-- The pencil button still opens the inline editor for the name, difficulty, and schedule (the
-  editor shows the days that *are* scheduled, i.e. the inverse of the skip list).
+- So `Read 10 pages ; 6 ; 3 ; sat,sun` creates a difficulty-6, urgency-3 habit that is scheduled
+  Monday to Friday. `Stretch ; 2` is difficulty 2, urgency 1, daily. `Meditate` uses the defaults.
+- The third slot is urgency, not days. Put days in the fourth slot: `Read ; 5 ; 2 ; sat,sun`.
+  Writing `Read ; 5 ; sat,sun` is an error.
+- The pencil button still opens the inline editor for the name, difficulty, urgency, and schedule
+  (the editor shows the days that *are* scheduled, i.e. the inverse of the skip list).
 
 ## Profiles
 
@@ -73,37 +78,52 @@ The server remembers the last active profile so a reload opens the same tab. Bec
 authentication, anyone who can reach the server can edit any profile — keep it on a trusted LAN or
 behind a reverse proxy with auth.
 
-## Ether rewards
+## Ether rewards and penalties
 
 Each completion earns ether using a linear rate:
 
 ```text
-ether = max(1, round(difficulty × factor))
+earned = max(1, round(difficulty × etherFactor))
+```
+
+Each missed scheduled day costs ether using the habit's urgency:
+
+```text
+lost = max(1, round(urgency × urgencyFactor))
 ```
 
 Ether amounts are marked with a small sparkle icon so the currency is easy to spot.
 
-- The **factor** is one global setting, default **1**, so difficulty 4 earns 4 ether. It can be
-  set between `0.1` and `10` on the **Settings** page (or with `PATCH /api/settings`). The
-  `max(1, …)` floor means even a difficulty-1 habit always earns at least one ether.
-- Rewards are **locked in when you check a habit**. Changing the factor or editing a habit's
-  difficulty later only affects future completions, so your history and weekly trends stay put.
-- Unchecking a habit removes that day's ether.
-- Deleting a habit removes it from the checklist but keeps the ether it already earned. Use
-  **Reset** if you want to clear a profile's ether as well.
-- Spending ether in the **Shop** lowers that profile's balance. The dashboard's combined total shows
-  the current balance, while each profile card's headline shows lifetime ether earned (including
-  ether already spent); today and the range chart also count earned ether.
+- **Difficulty** (1–10) sets the reward. **Urgency** (0–10) sets the penalty; urgency `0` turns
+  penalties off. New habits default to difficulty 5 and urgency 1.
+- **`etherFactor`** and **`urgencyFactor`** are global settings, each defaulting to **1**. Set them
+  between `0.1` and `10` on the **Settings** page (or with `PATCH /api/settings`). The `max(1, …)`
+  floors mean even a difficulty-1 habit earns at least one ether and even an urgency-1 habit loses
+  at least one.
+- Rewards and penalties are **locked in when the day is settled**. Changing either factor, or editing
+  a habit's difficulty or urgency later, only affects future days, so history and trends stay put.
+- Missed days are settled automatically by the server: at startup and before every API request it
+  walks scheduled days from the habit's penalty window up to yesterday. Rest days and completed days
+  are skipped, and today is never charged until it is over. Changing a habit's urgency or schedule
+  restarts its penalty window at today, so edits never re-bill the past.
+- Unchecking a habit removes that day's ether. Deleting a habit keeps the ether it already earned and
+  the penalties it already caused; **Reset** clears both.
+- Balances can go **negative** when penalties outpace earnings. Spending ether in the **Shop** lowers
+  the balance further. The dashboard's combined total is the current balance, while each profile
+  card's headline shows lifetime ether earned (including ether already spent); today and the range
+  chart count **net** ether (earned minus lost).
 - The **Dashboard** page has two sub-pages, **Ether trends** and **Habit trends**. Ether trends shows
-  a combined balance for all profiles plus one card per profile with its lifetime ether earned, ether
-  earned today, ether over the selected range, and a bar for each day. Habit trends shows one card per
-  profile counting how many habits that person completed each day, with its own chart. Use the
-  **Range** dropdown to switch both views between the last 7 days and the last 30 days. Each profile
-  card is tinted with that profile's selected palette, so people can tell their progress apart at a
-  glance.
+  a combined balance for all profiles plus one card per profile with its lifetime ether earned, net
+  ether today, net ether and penalties over the selected range, and a bar for each day. Gains draw
+  green upward bars and losses draw red downward bars. Habit trends shows one card per profile with
+  its own chart that tracks both sides of the day: completed habits grow upward in green and missed
+  scheduled habits grow downward in red, with today, missed, and daily average counts beside it. A day
+  is only counted as missed once it has ended, so today never counts. Use the **Range** dropdown to
+  switch both views between the last 7 days and the last 30 days. Each profile card's chrome is tinted
+  with that profile's selected palette, while the bars stay green and red.
 - Checking a habit plays a short chime. It is synthesised in the browser, so it needs no audio file.
   You can change it, or the Shop purchase sound, on the **Settings** page; see **Sounds** below.
-- There is no streak bonus; difficulty is the only input.
+- There is no streak bonus; difficulty is the only reward input.
 
 The nav bar, header, page titles, and shared page controls deliberately use a reserved slate colour
 that is **not** one of the selectable palettes. That keeps shared chrome distinct from every
@@ -159,6 +179,41 @@ cost. Clicking **Buy** purchases immediately, with no confirmation step; a short
 purchase. Purchases reduce each contributor's balance and are recorded in `spentEther`. Consumable
 items stay buyable; a one-time item is marked as purchased and rejects a second purchase.
 
+## Jobs
+
+The **Jobs** page is a shared job board. Any profile can post work, any profile can claim it, and
+finishing on time pays ether into the claimer's balance.
+
+A job is one combined **title / description**, an **ether reward** (1–1000), and an **ETA in whole
+minutes** (1–10080, so up to one week). Posting adds it to the **Inbox**, which every profile sees.
+Select a profile in **Acting as**, then use **Take** (or drag the card onto that profile's box) to
+claim a job. Each profile can hold at most **three jobs in progress** at once; the server rejects a
+fourth. Everyone sees claims live: the board refreshes every ten seconds and after each action.
+
+The reward depends on how much of the ETA had passed when the job was completed:
+
+| Elapsed time              | Multiplier | Result                         |
+| ------------------------- | ---------- | ------------------------------ |
+| 50% of the ETA or less    | `2×`       | Fast finish                    |
+| More than 50%, under 100% | `1.5×`     | Beat the estimate              |
+| 100% through 110%         | `1×`       | On time, including a 10% grace |
+| More than 110% through 2× | `0.5×`     | Late                           |
+| More than twice the ETA   | failure    | Penalty, not a reward          |
+
+The payout is `max(1, round(reward × multiplier))`. A job that runs past twice its ETA fails
+automatically: the server settles it at startup and before every API request, the card moves to the
+**Failed** box, and the claimer loses `max(1, round(reward × 0.5))` ether. Completing a job after it
+has already failed is rejected.
+
+Completed and failed jobs are greyed out and immutable. The board shows only the **latest ten** of
+each; older finished jobs stay in `data.json` as history. Jobs still in the inbox can be removed with
+the **×** button. Deleting a profile returns any job it had in progress to the Inbox, while finished
+jobs keep their assignee id and display **Deleted profile**.
+
+Job ether is part of the same balance as habit ether: it feeds the profile totals, the Dashboard
+trends, and the Shop. It is recorded in `jobEarnings` and `jobPenalties` on the day the job finishes,
+so later changes never rewrite it. **Reset** clears both ledgers along with the habit ether.
+
 ## Resetting
 
 Each profile tab has its own **Reset** button. It deletes every habit, completion, and earned
@@ -189,6 +244,7 @@ Everything lives in `data.json` (gitignored):
 {
   "settings": {
     "etherFactor": 1,
+    "urgencyFactor": 1,
     "sounds": {
       "habit": "chime",
       "purchase": "pop",
@@ -212,6 +268,9 @@ Everything lives in `data.json` (gitignored):
       "theme": "ember",
       "createdAt": "2026-11-17T08:00:00.000Z",
       "retiredEarnings": { "2026-11-15": 4 },
+      "retiredPenalties": { "2026-11-14": 3 },
+      "jobEarnings": { "2026-11-16": 20 },
+      "jobPenalties": { "2026-11-15": 10 },
       "spentEther": 12,
       "habits": [
         {
@@ -219,9 +278,12 @@ Everything lives in `data.json` (gitignored):
           "name": "Read 10 pages",
           "createdAt": "2026-11-17T08:00:00.000Z",
           "difficulty": 4,
+          "urgency": 3,
+          "penaltyFrom": "2026-11-17",
           "days": [1, 2, 3, 4, 5],
           "completions": ["2026-11-16", "2026-11-17"],
-          "earnings": { "2026-11-16": 4, "2026-11-17": 4 }
+          "earnings": { "2026-11-16": 4, "2026-11-17": 4 },
+          "penalties": { "2026-11-15": 3 }
         }
       ]
     }
@@ -241,20 +303,44 @@ Everything lives in `data.json` (gitignored):
       }
     ]
   },
+  "jobs": [
+    {
+      "id": "7d3e...",
+      "title": "Fix the leaking tap",
+      "reward": 20,
+      "etaMinutes": 60,
+      "status": "inProgress",
+      "createdBy": "9f12...",
+      "assignedTo": "9f12...",
+      "createdAt": "2026-11-17T08:00:00.000Z",
+      "startedAt": "2026-11-17T09:00:00.000Z",
+      "dueAt": "2026-11-17T10:00:00.000Z",
+      "completedAt": null,
+      "failedAt": null,
+      "multiplier": null,
+      "payout": null
+    }
+  ],
   "activeProfileId": "9f12..."
 }
 ```
 
 Completed dates are stored as local `YYYY-MM-DD` keys, so streaks survive restarts. `earnings`
-records the ether awarded for each of those dates. When a habit is deleted, its earned ether moves
-to the profile's `retiredEarnings` so the earned total is never reduced. `spentEther` is the running
-total spent in the Shop; a profile's balance is its earned ether minus `spentEther`. Back the file up
-by copying it; move machines by taking it with you. Older single-profile files (a top-level `habits`
-array) are migrated into a profile named **Mine** on startup, and completions from before the reward
-system are backfilled using the current factor and difficulty. `settings.sounds` stores the selected
-habit and purchase sound ids plus any custom sounds; built-in ids are `chime`, `sparkle`, `pop`,
-`bell`, and `off`. `settings.icon` stores the selected icon id plus any custom icons; built-in ids
-are `flame`, `spark`, `bolt`, `moon`, `gem`, and `heart`.
+records the ether awarded for each of those dates, and `penalties` records the ether lost for each
+missed scheduled date. When a habit is deleted, its earned ether moves to the profile's
+`retiredEarnings` and its penalties move to `retiredPenalties`, so neither total is reduced.
+`spentEther` is the running total spent in the Shop; a profile's balance is its earned ether minus
+its penalties minus `spentEther`. Job payouts and failure penalties live in the profile's
+`jobEarnings` and `jobPenalties`, keyed by the day the job finished, and count toward the same
+balance. Top-level `jobs` holds the shared board; finished jobs stay there as history even though the
+API only returns the latest ten of each. Back the file up by copying it; move machines by taking it
+with you. Older single-profile files (a top-level `habits` array) are migrated into a profile named
+**Mine** on startup, and completions from before the reward system are backfilled using the current
+factor and difficulty. Habits saved before urgency existed migrate to urgency `0`, so they never
+collect retroactive penalties; `penaltyFrom` marks the first date a habit can be charged for a miss.
+`settings.sounds` stores the selected habit and purchase sound ids plus any custom sounds; built-in
+ids are `chime`, `sparkle`, `pop`, `bell`, and `off`. `settings.icon` stores the selected icon id plus
+any custom icons; built-in ids are `flame`, `spark`, `bolt`, `moon`, `gem`, and `heart`.
 
 ## Homelab notes
 
@@ -279,8 +365,8 @@ docker run -d --name grindwell -p 3000:3000 -v grindwell-data:/data grindwell
 | `PATCH`  | `/api/profiles/:id`        | any of `name`, `theme`                        | Updated profile           |
 | `POST`   | `/api/profiles/:id/activate` | —                                           | Updated active profile    |
 | `DELETE` | `/api/profiles/:id`        | —                                             | `204`                     |
-| `GET`    | `/api/settings`            | —                                             | `{ etherFactor, sounds, icon }` |
-| `PATCH`  | `/api/settings`            | any of `etherFactor`, `sounds: { habit, purchase }`, `icon: { id }` | Updated settings |
+| `GET`    | `/api/settings`            | —                                             | `{ etherFactor, urgencyFactor, sounds, icon }` |
+| `PATCH`  | `/api/settings`            | any of `etherFactor`, `urgencyFactor`, `sounds: { habit, purchase }`, `icon: { id }` | Updated settings |
 | `POST`   | `/api/settings/sounds`     | `{ "name": "...", "url": "https://..." }`     | `{ sound, sounds }`       |
 | `DELETE` | `/api/settings/sounds/:id` | —                                             | Updated settings          |
 | `POST`   | `/api/settings/icons`      | `{ "name": "...", "url": "https://..." }`     | `{ icon, settings }`; selects the new icon |
@@ -290,21 +376,34 @@ docker run -d --name grindwell -p 3000:3000 -v grindwell-data:/data grindwell
 | `PATCH`  | `/api/shop/items/:id`      | any of `name`, `link`, `cost`, `image`, `consumable`, `excludedProfiles` | Updated item |
 | `DELETE` | `/api/shop/items/:id`      | —                                             | `204`                     |
 | `POST`   | `/api/shop/items/:id/buy`  | —                                             | `{ item, contributions[], profiles[] }` |
+| `GET`    | `/api/jobs`                | —                                             | `{ today, now, activeProfileId, profiles[], jobs, limits }` |
+| `POST`   | `/api/jobs`                | `{ "title": "...", "reward": 20, "etaMinutes": 60 }` | Created job in the inbox |
+| `POST`   | `/api/jobs/:id/take`       | —                                             | `{ job, jobs, profiles[] }`; accepts `?profile=<id>` |
+| `POST`   | `/api/jobs/:id/complete`   | —                                             | `{ job, jobs, profiles[] }` |
+| `DELETE` | `/api/jobs/:id`            | —                                             | `204`; inbox jobs only |
 | `GET`    | `/api/habits`              | —                                             | `{ today, habits[], profile, profiles[], settings, ether }` |
-| `POST`   | `/api/habits`              | `{ "name": "...", "difficulty": 5, "days": [1,3,5] }` | Created habit     |
-| `PATCH`  | `/api/habits/:id`          | any of `name`, `difficulty`, `days`           | Updated habit             |
-| `DELETE` | `/api/habits`              | —                                             | `204`; also clears ether and spent |
+| `POST`   | `/api/habits`              | `{ "name": "...", "difficulty": 5, "urgency": 1, "days": [1,3,5] }` | Created habit     |
+| `PATCH`  | `/api/habits/:id`          | any of `name`, `difficulty`, `urgency`, `days` | Updated habit            |
+| `DELETE` | `/api/habits`              | —                                             | `204`; also clears ether, penalties, and spent |
 | `POST`   | `/api/habits/:id/toggle`   | `{ "done": true }`                            | Updated habit             |
 | `DELETE` | `/api/habits/:id`          | —                                             | `204`                     |
 | `GET`    | `/api/health`              | —                                             | `{ ok, today }`           |
 
-`GET /dashboard`, `GET /shop`, and `GET /settings` serve the same single-page document as `/`; the
-client chooses which view to show from the URL. This keeps the HTML, theme handling, and profile
+`GET /dashboard`, `GET /jobs`, `GET /shop`, and `GET /settings` serve the same single-page document
+as `/`; the client chooses which view to show from the URL. This keeps the HTML, theme handling, and profile
 data in one place without a build step.
 
 All `/api/habits` routes accept an optional `?profile=<id>` and otherwise apply to the **active
 profile**. The UI uses that query parameter so each profile tab can read and write its own habits
 without touching anyone else's. An unknown profile id returns `404`.
+
+`/api/jobs` is shared, not profile-scoped. `GET` returns the board split into `inbox`, `inProgress`,
+`completed`, and `failed`, plus the `limits` (`maxInProgress` and `terminalShown`). `POST /api/jobs`
+adds to the inbox. `POST /api/jobs/:id/take` claims a job for `?profile=<id>` (or the active profile),
+enforces the three-job limit, and starts the ETA clock. `POST /api/jobs/:id/complete` scores the job
+from its elapsed time and records the payout. Only inbox jobs can be deleted; finished jobs are
+immutable. A job past twice its ETA is failed automatically before any non-health API request is
+handled.
 
 `GET /api/overview` is what the frontend loads: it returns every profile with its public habits,
 its `ether` balance, and a 30-day `summary` (the dashboard slices the last 7 or 30 days from it),
@@ -315,6 +414,7 @@ plus the shared `shop`:
   "today": "2026-11-18",
   "settings": {
     "etherFactor": 1,
+    "urgencyFactor": 1,
     "sounds": { "habit": "chime", "purchase": "pop", "custom": [] },
     "icon": { "id": "flame", "custom": [] }
   },
@@ -327,19 +427,30 @@ plus the shared `shop`:
       "habitCount": 3,
       "ether": 42,
       "earned": 54,
+      "penalties": 12,
       "spent": 12,
       "summary": {
         "factor": 1,
         "total": 42,
         "earned": 54,
+        "penalties": 12,
         "spent": 12,
         "today": 9,
         "last7": 28,
         "last30": 35,
+        "penaltyToday": 0,
+        "penaltyLast7": 6,
+        "penaltyLast30": 12,
+        "netToday": 9,
+        "netLast7": 22,
+        "netLast30": 23,
         "completedToday": 3,
         "completedLast7": 14,
         "completedLast30": 19,
-        "days": [{ "date": "2026-10-20", "ether": 4, "completed": 2 }, "… 30 days ending today"]
+        "days": [
+          { "date": "2026-10-20", "ether": 4, "penalty": 0, "net": 4, "completed": 2 },
+          "… 30 days ending today"
+        ]
       },
       "habits": ["… same shape as GET /api/habits"]
     }
@@ -348,11 +459,15 @@ plus the shared `shop`:
 }
 ```
 
-A public profile is `{ id, name, theme, habitCount, ether, earned, spent }`. `ether` is the
-current balance, `earned` is all ether ever earned, and `spent` is the amount spent in the Shop.
-`summary.total` is the balance while `summary.today`, `last7`, `last30`, and `days` count earned
-ether. `summary.completedToday`, `completedLast7`, `completedLast30`, and `days[].completed` count
-habit completions for the per-profile Habit trends cards. `theme` must be one of the palette ids below; it defaults to
+A public profile is `{ id, name, theme, habitCount, ether, earned, penalties, spent }`. `ether` is
+the current balance, `earned` is all ether ever earned, `penalties` is all ether ever lost, and
+`spent` is the amount spent in the Shop. `summary.total` is the balance while `summary.today`,
+`last7`, `last30`, and `days[].ether` count earned ether. `summary.penaltyToday`,
+`penaltyLast7`, `penaltyLast30`, and `days[].penalty` count lost ether; `summary.netToday`,
+`netLast7`, `netLast30`, and `days[].net` are earned minus lost. `summary.completedToday`,
+`completedLast7`, `completedLast30`, and `days[].completed` count habit completions, while
+`missedLast7`, `missedLast30`, and `days[].missed` count scheduled days before today with no
+completion, for the per-profile Habit trends cards. `theme` must be one of the palette ids below; it defaults to
 `ember`. Creating a profile switches the server's active profile to it, and deleting the active
 profile switches to the first remaining one. The last profile cannot be deleted. `activeProfileId`
 tells the Habits page which tab to open first.
@@ -365,17 +480,18 @@ first purchase and rejects later purchases; consumable items stay available. Buy
 across the included profiles that have a positive balance, proportionally to those balances, and
 returns the per-profile `contributions`.
 
-Each public habit includes `reward` (what completing it today would earn) and `earnedToday`.
-`PATCH /api/settings` changes the global factor; it accepts values from `0.1` to `10` and only
-affects future completions.
+Each public habit includes `urgency`, `penalty` (what missing it today would cost), `reward` (what
+completing it today would earn), and `earnedToday`. `PATCH /api/settings` changes the global
+`etherFactor` or `urgencyFactor`; both accept values from `0.1` to `10` and only affect future days.
 
-`difficulty` must be a whole number from 1 to 10 and defaults to `5` when omitted.
-`days` is an array of weekdays using `0 = Sunday ... 6 = Saturday`; it defaults to all seven
-days (daily). Send at least one day. Duplicates are removed and the result is sorted.
+`difficulty` and `urgency` must be whole numbers from 1 to 10 and 0 to 10 respectively; both default
+when omitted (`difficulty` to `5`, `urgency` to `1`). `days` is an array of weekdays using
+`0 = Sunday ... 6 = Saturday`; it defaults to all seven days (daily). Send at least one day.
+Duplicates are removed and the result is sorted.
 
 `toggle` also works with no body, in which case it flips today's state. Sending `done` explicitly
 is safer against double taps. `DELETE /api/habits` wipes the selected profile's habits, history,
-earned ether, and spent balance.
+earned ether, penalties, and spent balance.
 
 ### Schedule behaviour
 
@@ -389,18 +505,19 @@ earned ether, and spent balance.
 
 ### Editing habits
 
-Each habit has a pencil button that turns that card into an inline editor for its name,
-difficulty, and schedule — no popup, and the rest of the list stays visible. Save sends a
+Each habit has a pencil button that turns that card into an inline editor for its name, difficulty,
+urgency, and schedule — no popup, and the rest of the list stays visible. Save sends a
 `PATCH /api/habits/:id`; Cancel or `Esc` throws the draft away and returns focus to the pencil.
 `PATCH` accepts any subset of those fields; sending an empty body is a `400`.
 Changing the schedule keeps past completions — streaks are simply recalculated against the new
-days.
+days. Changing urgency or the schedule restarts the habit's penalty window at today, so past misses
+keep the amount they were charged.
 
 ## Themes
 
 Each profile chooses its own accent colour on the **Settings** page: **Ember** (default), **Blue**,
-**Teal**, **Green**, **Lime**, **Violet**, or **Rose**. Blue and green each have two shades
-(blue/teal and green/lime).
+**Teal**, or **Violet**. Green and red are deliberately not offered as palettes so the dashboard's
+green-up / red-down trend bars stay unambiguous.
 
 The choice is saved to `data.json` via `PATCH /api/profiles/:id`. A profile's habits, progress bar,
 and dashboard card all use its colour, so the shared pages stay readable while each person keeps

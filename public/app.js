@@ -19,6 +19,8 @@ const els = {
   profileAdd: document.getElementById('profile-add'),
   etherForm: document.getElementById('ether-form'),
   etherFactor: document.getElementById('ether-factor'),
+  urgencyForm: document.getElementById('urgency-form'),
+  urgencyFactor: document.getElementById('urgency-factor'),
   habitSound: document.getElementById('habit-sound'),
   purchaseSound: document.getElementById('purchase-sound'),
   soundPreviews: document.querySelectorAll('[data-preview]'),
@@ -30,6 +32,7 @@ const els = {
   etherToday: document.getElementById('ether-today'),
   etherRange: document.getElementById('ether-range'),
   etherRangeLabel: document.getElementById('ether-range-label'),
+  etherPenalties: document.getElementById('ether-penalties'),
   dashboardRange: document.getElementById('dashboard-range'),
   dashboardTabs: document.getElementById('dashboard-tabs'),
   dashboardEtherPanel: document.getElementById('dashboard-panel-ether'),
@@ -47,9 +50,28 @@ const els = {
   shopList: document.getElementById('shop-list'),
   shopEmpty: document.getElementById('shop-empty'),
   shopBalance: document.getElementById('shop-balance'),
+  jobActor: document.getElementById('job-actor'),
+  jobForm: document.getElementById('job-form'),
+  jobTitle: document.getElementById('job-title'),
+  jobReward: document.getElementById('job-reward'),
+  jobEta: document.getElementById('job-eta'),
+  jobInbox: document.getElementById('jobs-inbox'),
+  jobInboxEmpty: document.getElementById('jobs-inbox-empty'),
+  jobInboxCount: document.getElementById('jobs-inbox-count'),
+  jobProgress: document.getElementById('jobs-progress'),
+  jobProgressCount: document.getElementById('jobs-progress-count'),
+  jobCompleted: document.getElementById('jobs-completed'),
+  jobCompletedBox: document.getElementById('jobs-completed-box'),
+  jobCompletedEmpty: document.getElementById('jobs-completed-empty'),
+  jobCompletedCount: document.getElementById('jobs-completed-count'),
+  jobFailed: document.getElementById('jobs-failed'),
+  jobFailedEmpty: document.getElementById('jobs-failed-empty'),
+  jobFailedCount: document.getElementById('jobs-failed-count'),
+  jobStatus: document.getElementById('jobs-status'),
   pages: {
     habits: document.getElementById('page-habits'),
     dashboard: document.getElementById('page-dashboard'),
+    jobs: document.getElementById('page-jobs'),
     shop: document.getElementById('page-shop'),
     settings: document.getElementById('page-settings'),
   },
@@ -59,6 +81,7 @@ const els = {
 const DAY_NAMES = ['Sunday', 'Monday', 'Tuesday', 'Wednesday', 'Thursday', 'Friday', 'Saturday'];
 const DAY_SHORT = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 const parseHabitInput = window.HabitInput.parseHabitInput;
+const formatJobDuration = window.JobMath.formatDuration;
 // Display weeks starting on Monday; the wire format stays 0 = Sunday.
 const WEEK_ORDER = [1, 2, 3, 4, 5, 6, 0];
 // Colours live in styles.css as [data-theme="..."] blocks; keep ids in sync.
@@ -66,10 +89,7 @@ const THEMES = [
   { id: 'ember', name: 'Ember' },
   { id: 'blue', name: 'Blue' },
   { id: 'teal', name: 'Teal' },
-  { id: 'green', name: 'Green' },
-  { id: 'lime', name: 'Lime' },
   { id: 'violet', name: 'Violet' },
-  { id: 'rose', name: 'Rose' },
 ];
 // Built-in sounds are synthesised; custom sounds come from settings.sounds.custom.
 const SOUND_PRESETS = [
@@ -112,7 +132,9 @@ const PAGE =
       ? 'settings'
       : PAGE_PATH === '/shop'
         ? 'shop'
-        : 'habits';
+        : PAGE_PATH === '/jobs'
+          ? 'jobs'
+          : 'habits';
 const DASHBOARD_RANGE_KEY = 'grindwell.dashboardRange';
 const DASHBOARD_VIEW_KEY = 'grindwell.dashboardView';
 const APPEARANCE_KEY = 'grindwell.appearance';
@@ -124,10 +146,15 @@ const STAR_PATH =
 let profiles = [];
 let settings = {
   etherFactor: 1,
+  urgencyFactor: 1,
   sounds: { habit: 'chime', purchase: 'pop', custom: [] },
   icon: { id: 'flame', custom: [] },
 };
 let shop = { items: [] };
+let jobs = { inbox: [], inProgress: [], completed: [], failed: [] };
+let jobLimits = { maxInProgress: 3, terminalShown: 10 };
+let jobActorId = null;
+let jobNow = Date.now();
 let today = '';
 let activeTabId = null;
 let dashboardRange = storedDashboardRange();
@@ -373,10 +400,16 @@ function rangeDays(summary) {
   return dashboardRange === 'month' ? days.slice(-30) : days.slice(-7);
 }
 
-function rangeEther(summary) {
+function rangeNet(summary) {
   return dashboardRange === 'month'
-    ? Number(summary.last30) || 0
-    : Number(summary.last7) || 0;
+    ? Number(summary.netLast30) || 0
+    : Number(summary.netLast7) || 0;
+}
+
+function rangePenalty(summary) {
+  return dashboardRange === 'month'
+    ? Number(summary.penaltyLast30) || 0
+    : Number(summary.penaltyLast7) || 0;
 }
 
 // Every profile summary covers the same 30 days, so the selected range can be
@@ -385,11 +418,24 @@ function rangeCompletions(days) {
   return days.reduce((sum, day) => sum + day.completed, 0);
 }
 
+function rangeMissed(days) {
+  return days.reduce((sum, day) => sum + (Number(day.missed) || 0), 0);
+}
+
 function syncDifficulty(input, output) {
   const value = Number(input.value);
   const { word } = difficultyBand(value);
   output.textContent = String(value);
   input.setAttribute('aria-valuetext', `${value} out of 10, ${word}`);
+}
+
+function syncUrgency(input, output) {
+  const value = Number(input.value);
+  output.textContent = String(value);
+  input.setAttribute(
+    'aria-valuetext',
+    value === 0 ? '0, penalties off' : `${value} out of 10`,
+  );
 }
 
 function selectedDays(container) {
@@ -713,6 +759,14 @@ function habitNode(profile, habit) {
 
   meta.append(streak, starRating(habit.difficulty));
 
+  if (habit.urgency > 0 && habit.penalty > 0) {
+    const penalty = document.createElement('span');
+    penalty.className = 'chip chip-penalty';
+    penalty.textContent = `−${habit.penalty} if missed`;
+    penalty.title = `Urgency ${habit.urgency} of 10`;
+    meta.append(penalty);
+  }
+
   if (!habit.dueToday) {
     const rest = document.createElement('span');
     rest.className = 'chip chip-rest';
@@ -803,6 +857,37 @@ function editFormNode(profile, habit) {
 
   difficultyField.append(difficultyLabel, difficultyInput, difficultyOutput);
 
+  const urgencyField = document.createElement('div');
+  urgencyField.className = 'field';
+
+  const urgencyLabel = document.createElement('label');
+  urgencyLabel.textContent = 'Urgency';
+  urgencyLabel.htmlFor = `edit-urgency-${habit.id}`;
+
+  const urgencyInput = document.createElement('input');
+  urgencyInput.id = `edit-urgency-${habit.id}`;
+  urgencyInput.type = 'range';
+  urgencyInput.min = '0';
+  urgencyInput.max = '10';
+  urgencyInput.step = '1';
+  urgencyInput.value = String(draft.urgency);
+  urgencyInput.setAttribute('aria-describedby', `edit-urgency-value-${habit.id}`);
+
+  const urgencyOutput = document.createElement('output');
+  urgencyOutput.id = `edit-urgency-value-${habit.id}`;
+  urgencyOutput.htmlFor = urgencyInput.id;
+  urgencyOutput.textContent = String(draft.urgency);
+
+  urgencyInput.addEventListener('input', () => {
+    syncUrgency(urgencyInput, urgencyOutput);
+    if (editDraft && editDraft.key === key) {
+      editDraft.urgency = Number(urgencyInput.value);
+    }
+  });
+  syncUrgency(urgencyInput, urgencyOutput);
+
+  urgencyField.append(urgencyLabel, urgencyInput, urgencyOutput);
+
   const daysField = document.createElement('div');
   daysField.className = 'field';
 
@@ -850,12 +935,13 @@ function editFormNode(profile, habit) {
 
   actions.append(cancel, save);
 
-  form.append(title, nameInput, difficultyField, daysField, actions);
+  form.append(title, nameInput, difficultyField, urgencyField, daysField, actions);
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     saveEdit(profile, habit, {
       name: nameInput.value,
       difficulty: Number(difficultyInput.value),
+      urgency: Number(urgencyInput.value),
       days: selectedDays(days),
       save,
     });
@@ -895,7 +981,8 @@ function profileSection(profile) {
   reset.textContent = 'Reset';
   reset.title = `Delete ${profile.name}'s habits, history, and ether`;
   reset.setAttribute('aria-label', `Reset all habits and ether for ${profile.name}`);
-  reset.disabled = profile.habits.length === 0 && profile.ether === 0;
+  reset.disabled =
+    profile.habits.length === 0 && profile.ether === 0 && !(profile.penalties > 0);
   reset.addEventListener('click', () => resetHabits(profile));
 
   head.append(titleWrap, reset);
@@ -962,7 +1049,7 @@ function profileSection(profile) {
   input.id = `habit-input-${profile.id}`;
   input.name = 'name';
   input.type = 'text';
-  input.placeholder = 'Read 10 pages ; 6 ; sat,sun';
+  input.placeholder = 'Read 10 pages ; 6 ; 3 ; sat,sun';
   input.maxLength = 100;
   input.required = true;
 
@@ -1013,19 +1100,22 @@ function statNode(label, value) {
 
 function etherChartNode(days, profileName) {
   const monthly = dashboardRange === 'month';
+  const hasNegative = days.some((day) => (Number(day.net) || 0) < 0);
   const chart = document.createElement('div');
-  chart.className = 'ether-chart' + (monthly ? ' is-month' : '');
+  chart.className =
+    'ether-chart' + (monthly ? ' is-month' : '') + (hasNegative ? ' has-negative' : '');
   chart.setAttribute('role', 'img');
   chart.setAttribute(
     'aria-label',
-    `Ether earned per day over the ${rangeLabel().toLowerCase()} for ${profileName}`,
+    `Net ether per day over the ${rangeLabel().toLowerCase()} for ${profileName}`,
   );
 
-  const max = Math.max(1, ...days.map((day) => day.ether));
+  const max = Math.max(1, ...days.map((day) => Math.abs(Number(day.net) || 0)));
   const nodes = days.map((day, index) => {
     const [year, month, date] = day.date.split('-').map(Number);
     const weekday = DAY_SHORT[new Date(year, month - 1, date).getDay()];
     const showLabel = !monthly || index % 5 === 0 || index === days.length - 1;
+    const net = Number(day.net) || 0;
 
     const column = document.createElement('div');
     column.className = 'ether-day' + (day.date === today ? ' is-today' : '');
@@ -1033,7 +1123,7 @@ function etherChartNode(days, profileName) {
     if (!monthly) {
       const value = document.createElement('span');
       value.className = 'ether-day-value';
-      value.textContent = String(day.ether);
+      value.textContent = String(net);
       column.append(value);
     }
 
@@ -1041,8 +1131,17 @@ function etherChartNode(days, profileName) {
     track.className = 'ether-bar-track';
 
     const bar = document.createElement('div');
-    bar.className = 'ether-bar';
-    bar.style.height = `${Math.round((day.ether / max) * 100)}%`;
+    bar.className = 'ether-bar' + (net < 0 ? ' is-negative' : '');
+    const share = Math.round((Math.abs(net) / max) * (hasNegative ? 50 : 100));
+    bar.style.height = `${share}%`;
+    if (hasNegative) {
+      if (net < 0) {
+        bar.style.top = '50%';
+        bar.style.bottom = 'auto';
+      } else {
+        bar.style.bottom = '50%';
+      }
+    }
     track.append(bar);
 
     const name = document.createElement('span');
@@ -1050,7 +1149,9 @@ function etherChartNode(days, profileName) {
     name.textContent = showLabel ? (monthly ? String(date) : weekday) : '';
 
     column.append(track, name);
-    column.title = `${day.date}: ${plural(day.ether, 'ether')}`;
+    column.title = day.penalty
+      ? `${day.date}: ${day.ether} earned, ${day.penalty} lost (${net} net)`
+      : `${day.date}: ${net} net ether`;
     return column;
   });
 
@@ -1060,19 +1161,30 @@ function etherChartNode(days, profileName) {
 
 function completionChart(days, profileName) {
   const monthly = dashboardRange === 'month';
+  const hasMissed = days.some((day) => (Number(day.missed) || 0) > 0);
   const chart = document.createElement('div');
-  chart.className = 'ether-chart habit-chart' + (monthly ? ' is-month' : '');
+  chart.className =
+    'ether-chart habit-chart' +
+    (monthly ? ' is-month' : '') +
+    (hasMissed ? ' has-negative' : '');
   chart.setAttribute('role', 'img');
   chart.setAttribute(
     'aria-label',
-    `Habits completed per day over the ${rangeLabel().toLowerCase()} for ${profileName}`,
+    `Habits completed and missed per day over the ${rangeLabel().toLowerCase()} for ${profileName}`,
   );
 
-  const max = Math.max(1, ...days.map((day) => day.completed));
+  // Completed and missed counts share one scale so the bars line up: completed
+  // grows up from the midline, missed grows down.
+  const max = Math.max(
+    1,
+    ...days.map((day) => Math.max(Number(day.completed) || 0, Number(day.missed) || 0)),
+  );
   const nodes = days.map((day, index) => {
     const [year, month, date] = day.date.split('-').map(Number);
     const weekday = DAY_SHORT[new Date(year, month - 1, date).getDay()];
     const showLabel = !monthly || index % 5 === 0 || index === days.length - 1;
+    const completed = Number(day.completed) || 0;
+    const missed = Number(day.missed) || 0;
 
     const column = document.createElement('div');
     column.className = 'ether-day' + (day.date === today ? ' is-today' : '');
@@ -1080,24 +1192,42 @@ function completionChart(days, profileName) {
     if (!monthly) {
       const value = document.createElement('span');
       value.className = 'ether-day-value';
-      value.textContent = String(day.completed);
+      value.textContent = String(completed);
       column.append(value);
     }
 
     const track = document.createElement('div');
     track.className = 'ether-bar-track';
 
-    const bar = document.createElement('div');
-    bar.className = 'ether-bar';
-    bar.style.height = `${Math.round((day.completed / max) * 100)}%`;
-    track.append(bar);
+    const up = document.createElement('div');
+    up.className = 'ether-bar';
+    up.style.height = `${Math.round((completed / max) * (hasMissed ? 50 : 100))}%`;
+    if (hasMissed) up.style.bottom = '50%';
+    track.append(up);
+
+    if (hasMissed) {
+      const down = document.createElement('div');
+      down.className = 'ether-bar is-negative';
+      down.style.height = `${Math.round((missed / max) * 50)}%`;
+      down.style.top = '50%';
+      down.style.bottom = 'auto';
+      track.append(down);
+    }
 
     const name = document.createElement('span');
     name.className = 'ether-day-label';
     name.textContent = showLabel ? (monthly ? String(date) : weekday) : '';
 
-    column.append(track, name);
-    column.title = `${day.date}: ${plural(day.completed, 'habit')} completed`;
+    if (monthly) {
+      column.append(track, name);
+    } else {
+      const missedValue = document.createElement('span');
+      missedValue.className = 'ether-day-value ether-day-missed';
+      missedValue.textContent = hasMissed ? (missed > 0 ? `−${missed}` : '0') : '';
+      column.append(track, missedValue, name);
+    }
+
+    column.title = `${day.date}: ${completed} completed, ${missed} missed`;
     return column;
   });
 
@@ -1109,6 +1239,7 @@ function habitTrendCard(profile) {
   const summary = profile.summary || {};
   const days = rangeDays(summary);
   const total = rangeCompletions(days);
+  const missed = rangeMissed(days);
   const todayCount = days.find((day) => day.date === today)?.completed || 0;
   const average = days.length ? Math.round((total / days.length) * 10) / 10 : 0;
 
@@ -1139,7 +1270,11 @@ function habitTrendCard(profile) {
 
   const stats = document.createElement('dl');
   stats.className = 'ether-stats';
-  stats.append(statNode('Today', todayCount), statNode('Daily average', average));
+  stats.append(
+    statNode('Today', todayCount),
+    statNode('Missed', missed),
+    statNode('Daily average', average),
+  );
 
   head.append(left, stats);
   card.append(head, completionChart(days, profile.name));
@@ -1150,9 +1285,11 @@ function dashboardCard(profile) {
   const summary = profile.summary || {
     total: profile.ether,
     earned: profile.earned ?? profile.ether,
-    today: 0,
-    last7: 0,
-    last30: 0,
+    netToday: 0,
+    netLast7: 0,
+    netLast30: 0,
+    penaltyLast7: 0,
+    penaltyLast30: 0,
     days: [],
   };
 
@@ -1183,7 +1320,11 @@ function dashboardCard(profile) {
 
   const stats = document.createElement('dl');
   stats.className = 'ether-stats';
-  stats.append(statNode('Today', summary.today), statNode(rangeLabel(), rangeEther(summary)));
+  stats.append(
+    statNode('Today', summary.netToday ?? summary.today ?? 0),
+    statNode(rangeLabel(), rangeNet(summary)),
+    statNode('Penalties', rangePenalty(summary)),
+  );
 
   head.append(left, stats);
   card.append(head, etherChartNode(rangeDays(summary), profile.name));
@@ -1232,11 +1373,15 @@ function onDashboardTabKeydown(event) {
 function renderDashboard() {
   const total = profiles.reduce((sum, profile) => sum + (profile.ether || 0), 0);
   const todayTotal = profiles.reduce(
-    (sum, profile) => sum + ((profile.summary && profile.summary.today) || 0),
+    (sum, profile) => sum + ((profile.summary && profile.summary.netToday) || 0),
     0,
   );
   const rangeTotal = profiles.reduce(
-    (sum, profile) => sum + rangeEther(profile.summary || {}),
+    (sum, profile) => sum + rangeNet(profile.summary || {}),
+    0,
+  );
+  const penaltyTotal = profiles.reduce(
+    (sum, profile) => sum + rangePenalty(profile.summary || {}),
     0,
   );
 
@@ -1244,6 +1389,7 @@ function renderDashboard() {
   els.etherToday.textContent = String(todayTotal);
   els.etherRangeLabel.textContent = rangeLabel();
   els.etherRange.textContent = String(rangeTotal);
+  els.etherPenalties.textContent = String(penaltyTotal);
   els.dashboardRange.value = dashboardRange;
 
   els.dashboardList.replaceChildren(...profiles.map(dashboardCard));
@@ -1749,6 +1895,370 @@ async function buyShopItem(item) {
   }
 }
 
+/* ---------- jobs ---------- */
+
+function jobProfile(id) {
+  return profiles.find((profile) => profile.id === id) || null;
+}
+
+function jobProfileName(id) {
+  const profile = jobProfile(id);
+  return profile ? profile.name : 'Deleted profile';
+}
+
+function jobInProgressCount(profileId) {
+  return jobs.inProgress.filter((job) => job.assignedTo === profileId).length;
+}
+
+function jobRemainingLabel(job) {
+  const due = Date.parse(job.dueAt);
+  if (!Number.isFinite(due)) return '';
+  const left = due - jobNow;
+  return left >= 0
+    ? `${formatJobDuration(left)} left`
+    : `${formatJobDuration(-left)} overdue`;
+}
+
+function jobElapsedLabel(job) {
+  const started = Date.parse(job.startedAt);
+  const finished = Date.parse(job.completedAt);
+  if (!Number.isFinite(started) || !Number.isFinite(finished)) return '';
+  return `Finished in ${formatJobDuration(Math.max(0, finished - started))}`;
+}
+
+function jobChip(text, className = '') {
+  const chip = document.createElement('span');
+  chip.className = `job-chip${className ? ` ${className}` : ''}`;
+  chip.textContent = text;
+  return chip;
+}
+
+function jobActionButton(label, className, onClick) {
+  const button = document.createElement('button');
+  button.type = 'button';
+  button.className = `job-action ${className}`;
+  button.textContent = label;
+  button.addEventListener('click', onClick);
+  return button;
+}
+
+function jobCard(job, { draggable = false } = {}) {
+  const card = document.createElement('article');
+  card.className = `job-card is-${job.status}`;
+  card.dataset.id = job.id;
+  card.setAttribute('role', 'listitem');
+
+  const title = document.createElement('p');
+  title.className = 'job-card-title';
+  title.textContent = job.title;
+
+  const meta = document.createElement('div');
+  meta.className = 'job-meta';
+
+  const reward = document.createElement('span');
+  reward.className = 'job-chip job-chip-reward';
+  reward.append(etherIcon(), document.createTextNode(` ${job.reward} ether`));
+
+  meta.append(reward, jobChip(`ETA ${formatJobDuration(job.etaMinutes * 60000)}`));
+
+  const foot = document.createElement('div');
+  foot.className = 'job-card-foot';
+
+  const by = document.createElement('span');
+  by.className = 'job-by';
+
+  if (job.status === 'inbox') {
+    by.textContent = `Posted by ${jobProfileName(job.createdBy)}`;
+    const actions = document.createElement('div');
+    actions.className = 'job-actions';
+
+    const take = jobActionButton('Take', 'job-take', () => takeJob(job));
+    const full =
+      !jobActorId || jobInProgressCount(jobActorId) >= jobLimits.maxInProgress;
+    take.disabled = full;
+    if (full) {
+      take.title = jobActorId
+        ? `${jobProfileName(jobActorId)} already has ${jobLimits.maxInProgress} jobs in progress`
+        : 'Pick a profile first';
+    }
+
+    const remove = jobActionButton('×', 'job-remove', () => deleteJob(job));
+    remove.title = `Remove ${job.title} from the inbox`;
+    remove.setAttribute('aria-label', `Remove ${job.title} from the inbox`);
+
+    actions.append(take, remove);
+    foot.append(by, actions);
+  } else if (job.status === 'inProgress') {
+    const remaining = jobRemainingLabel(job);
+    const overdue = Date.parse(job.dueAt) < jobNow;
+    by.textContent = `Taken by ${jobProfileName(job.assignedTo)}`;
+    const time = jobChip(remaining, overdue ? 'job-time is-overdue' : 'job-time');
+    const actions = document.createElement('div');
+    actions.className = 'job-actions';
+    actions.append(jobActionButton('Complete', 'job-complete', () => completeJob(job)));
+    foot.append(by, time, actions);
+  } else if (job.status === 'completed') {
+    by.textContent = `By ${jobProfileName(job.assignedTo)} · ${jobElapsedLabel(job)}`;
+    const outcome = jobChip(
+      `×${job.multiplier} · +${job.payout} ether`,
+      'job-outcome is-success',
+    );
+    foot.append(by, outcome);
+  } else {
+    by.textContent = `By ${jobProfileName(job.assignedTo)}`;
+    const outcome = jobChip(`Failed · ${job.payout} ether`, 'job-outcome is-failure');
+    foot.append(by, outcome);
+  }
+
+  card.append(title, meta, foot);
+
+  if (draggable) {
+    card.draggable = true;
+    card.addEventListener('dragstart', (event) => startJobDrag(event, job));
+    card.addEventListener('dragend', endJobDrag);
+  }
+
+  return card;
+}
+
+function startJobDrag(event, job) {
+  if (!event.dataTransfer) return;
+  event.dataTransfer.setData('text/plain', job.id);
+  event.dataTransfer.effectAllowed = 'move';
+  event.currentTarget.classList.add('is-dragging');
+}
+
+function endJobDrag(event) {
+  event.currentTarget.classList.remove('is-dragging');
+  for (const node of document.querySelectorAll('.is-drop')) {
+    node.classList.remove('is-drop');
+  }
+}
+
+function wireJobDrop(node, onDrop) {
+  node.addEventListener('dragover', (event) => {
+    if (!event.dataTransfer) return;
+    event.preventDefault();
+    event.dataTransfer.dropEffect = 'move';
+    node.classList.add('is-drop');
+  });
+  node.addEventListener('dragleave', (event) => {
+    if (node.contains(event.relatedTarget)) return;
+    node.classList.remove('is-drop');
+  });
+  node.addEventListener('drop', (event) => {
+    event.preventDefault();
+    node.classList.remove('is-drop');
+    const id = event.dataTransfer ? event.dataTransfer.getData('text/plain') : '';
+    if (id) onDrop(id);
+  });
+}
+
+function jobProfileBox(profile) {
+  const box = document.createElement('section');
+  box.className = 'job-profile-box';
+  box.dataset.theme = profile.theme;
+  box.dataset.profile = profile.id;
+
+  const own = jobs.inProgress.filter((job) => job.assignedTo === profile.id);
+
+  const head = document.createElement('div');
+  head.className = 'job-profile-head';
+
+  const dot = document.createElement('span');
+  dot.className = 'job-profile-dot';
+  dot.setAttribute('aria-hidden', 'true');
+
+  const name = document.createElement('span');
+  name.className = 'job-profile-name';
+  name.textContent = profile.name;
+
+  const count = document.createElement('span');
+  count.className = 'job-profile-count';
+  count.textContent = `${own.length}/${jobLimits.maxInProgress}`;
+
+  head.append(dot, name, count);
+
+  const list = document.createElement('div');
+  list.className = 'jobs-list';
+  list.setAttribute('role', 'list');
+  list.replaceChildren(...own.map((job) => jobCard(job, { draggable: true })));
+
+  const empty = document.createElement('p');
+  empty.className = 'jobs-empty';
+  empty.textContent = own.length === 0 ? 'Free for a job.' : '';
+  empty.hidden = own.length > 0;
+
+  wireJobDrop(box, (id) => {
+    const job = jobs.inbox.find((entry) => entry.id === id);
+    if (job) takeJob(job, profile.id);
+  });
+
+  box.append(head, list, empty);
+  return box;
+}
+
+function renderJobActor() {
+  if (profiles.length === 0) {
+    jobActorId = null;
+    els.jobActor.replaceChildren();
+    return;
+  }
+
+  const signature = profiles.map((profile) => `${profile.id}:${profile.name}`).join('|');
+  if (els.jobActor.dataset.signature !== signature) {
+    els.jobActor.replaceChildren(
+      ...profiles.map((profile) => {
+        const option = document.createElement('option');
+        option.value = profile.id;
+        option.textContent = profile.name;
+        return option;
+      }),
+    );
+    els.jobActor.dataset.signature = signature;
+  }
+
+  if (!profiles.some((profile) => profile.id === jobActorId)) {
+    jobActorId = profiles[0].id;
+  }
+  els.jobActor.value = jobActorId;
+}
+
+function renderJobs() {
+  renderJobActor();
+
+  els.jobInbox.replaceChildren(...jobs.inbox.map((job) => jobCard(job, { draggable: true })));
+  els.jobInboxEmpty.hidden = jobs.inbox.length > 0;
+  els.jobInboxCount.textContent = String(jobs.inbox.length);
+
+  els.jobProgress.replaceChildren(...profiles.map(jobProfileBox));
+  els.jobProgressCount.textContent = String(jobs.inProgress.length);
+
+  els.jobCompleted.replaceChildren(...jobs.completed.map((job) => jobCard(job)));
+  els.jobCompletedEmpty.hidden = jobs.completed.length > 0;
+  els.jobCompletedCount.textContent = String(jobs.completed.length);
+
+  els.jobFailed.replaceChildren(...jobs.failed.map((job) => jobCard(job)));
+  els.jobFailedEmpty.hidden = jobs.failed.length > 0;
+  els.jobFailedCount.textContent = String(jobs.failed.length);
+
+  els.jobStatus.textContent = `Last updated ${new Date(jobNow).toLocaleTimeString()}`;
+}
+
+async function loadJobs() {
+  const data = await api('/api/jobs');
+  jobs = data.jobs || { inbox: [], inProgress: [], completed: [], failed: [] };
+  jobLimits = data.limits || jobLimits;
+  jobNow = Date.parse(data.now) || Date.now();
+
+  if (!profiles.some((profile) => profile.id === jobActorId)) {
+    jobActorId = data.activeProfileId || profiles[0]?.id || null;
+  }
+
+  renderJobs();
+}
+
+async function refreshJobsQuietly() {
+  try {
+    await loadJobs();
+  } catch {
+    /* keep the current board */
+  }
+}
+
+async function addJob(event) {
+  event.preventDefault();
+  const title = els.jobTitle.value.trim();
+  const reward = Number(els.jobReward.value);
+  const etaMinutes = Number(els.jobEta.value);
+
+  if (!title) {
+    toast('Give the job a title.');
+    els.jobTitle.focus();
+    return;
+  }
+
+  const submit = els.jobForm.querySelector('button[type="submit"]');
+  submit.disabled = true;
+  try {
+    const data = await api('/api/jobs', {
+      method: 'POST',
+      body: JSON.stringify({ title, reward, etaMinutes }),
+    });
+    jobs = data.jobs || jobs;
+    els.jobForm.reset();
+    renderJobs();
+    els.jobTitle.focus();
+    toast('Job posted to the inbox.');
+  } catch (error) {
+    toast(error.message);
+  } finally {
+    submit.disabled = false;
+  }
+}
+
+async function takeJob(job, profileId = jobActorId) {
+  if (!profileId) {
+    toast('Pick a profile first.');
+    return;
+  }
+
+  try {
+    const data = await api(`/api/jobs/${job.id}/take?profile=${encodeURIComponent(profileId)}`, {
+      method: 'POST',
+      body: '{}',
+    });
+    jobs = data.jobs || jobs;
+    jobNow = Date.now();
+    renderJobs();
+    toast(`${jobProfileName(profileId)} took the job.`);
+  } catch (error) {
+    toast(error.message);
+    await refreshJobsQuietly();
+  }
+}
+
+async function completeJob(job) {
+  try {
+    const data = await api(`/api/jobs/${job.id}/complete`, {
+      method: 'POST',
+      body: '{}',
+    });
+    jobs = data.jobs || jobs;
+    jobNow = Date.now();
+    renderJobs();
+    const payout = data.job ? data.job.payout : 0;
+    toast(`Job completed: ${payout > 0 ? '+' : ''}${payout} ether.`);
+  } catch (error) {
+    toast(error.message);
+    await refreshJobsQuietly();
+  }
+}
+
+async function deleteJob(job) {
+  if (!window.confirm(`Remove "${job.title}" from the inbox?`)) return;
+  try {
+    await api(`/api/jobs/${job.id}`, { method: 'DELETE' });
+    await loadJobs();
+    toast('Job removed.');
+  } catch (error) {
+    toast(error.message);
+    await refreshJobsQuietly();
+  }
+}
+
+async function selectJobActor(id) {
+  if (!id) return;
+  jobActorId = id;
+  try {
+    await api(`/api/profiles/${id}/activate`, { method: 'POST' });
+    activeTabId = id;
+    renderJobs();
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 /* ---------- settings ---------- */
 
 function soundOptions() {
@@ -1837,6 +2347,9 @@ function renderSounds() {
 function renderSettings() {
   if (document.activeElement !== els.etherFactor) {
     els.etherFactor.value = String(settings.etherFactor);
+  }
+  if (document.activeElement !== els.urgencyFactor) {
+    els.urgencyFactor.value = String(settings.urgencyFactor ?? 1);
   }
   renderSounds();
   renderAppIcon();
@@ -2112,6 +2625,27 @@ async function saveEtherFactor(event) {
   }
 }
 
+async function saveUrgencyFactor(event) {
+  event.preventDefault();
+  const factor = Number(els.urgencyFactor.value);
+
+  if (!Number.isFinite(factor) || factor < 0.1 || factor > 10) {
+    toast('Urgency factor must be between 0.1 and 10.');
+    return;
+  }
+
+  try {
+    settings = await api('/api/settings', {
+      method: 'PATCH',
+      body: JSON.stringify({ urgencyFactor: factor }),
+    });
+    await load({ silent: true });
+    toast(`Penalty rate set to ${settings.urgencyFactor} ether per urgency point.`);
+  } catch (error) {
+    toast(error.message);
+  }
+}
+
 /* ---------- load ---------- */
 
 async function load({ silent = false } = {}) {
@@ -2120,6 +2654,7 @@ async function load({ silent = false } = {}) {
     profiles = data.profiles;
     settings = data.settings || {
       etherFactor: 1,
+      urgencyFactor: 1,
       sounds: { habit: 'chime', purchase: 'pop', custom: [] },
       icon: { id: 'flame', custom: [] },
     };
@@ -2143,6 +2678,7 @@ async function load({ silent = false } = {}) {
     renderHabits();
     renderDashboard();
     renderShop();
+    if (PAGE === 'jobs') await loadJobs();
     renderSettings();
   } catch (error) {
     if (!silent) toast(`Could not load habits: ${error.message}`);
@@ -2230,15 +2766,15 @@ async function deleteHabit(profile, habit) {
 
 async function resetHabits(profile) {
   const hasHabits = profile.habits.length > 0;
-  const hasEther = profile.ether > 0;
-  if (!hasHabits && !hasEther) {
+  const hasHistory = profile.ether !== 0 || (profile.penalties || 0) > 0;
+  if (!hasHabits && !hasHistory) {
     toast(`There is nothing to reset for ${profile.name}.`);
     return;
   }
 
   const message = hasHabits
     ? `Delete all ${plural(profile.habits.length, 'habit')} for ${profile.name}, their history, and all earned ether? This cannot be undone.`
-    : `Delete all ${plural(profile.ether, 'ether')} for ${profile.name}? This cannot be undone.`;
+    : `Delete the remaining ether and penalty history for ${profile.name}? This cannot be undone.`;
   if (!window.confirm(message)) {
     return;
   }
@@ -2251,7 +2787,7 @@ async function resetHabits(profile) {
     toast(
       hasHabits
         ? `All habits and ether cleared for ${profile.name}.`
-        : `Ether cleared for ${profile.name}.`,
+        : `Ether history cleared for ${profile.name}.`,
     );
   } catch (error) {
     toast(error.message);
@@ -2285,6 +2821,7 @@ function openEdit(profile, habit) {
     key,
     name: habit.name,
     difficulty: habit.difficulty,
+    urgency: habit.urgency,
     days: [...habit.days],
   };
   renderHabits();
@@ -2299,7 +2836,7 @@ function closeEdit(profile, id = null) {
   if (id) habitCard(profile, id)?.querySelector('.edit')?.focus();
 }
 
-async function saveEdit(profile, habit, { name, difficulty, days, save }) {
+async function saveEdit(profile, habit, { name, difficulty, urgency, days, save }) {
   const trimmed = name.trim();
   if (!trimmed) {
     toast('Give the habit a name.');
@@ -2314,7 +2851,7 @@ async function saveEdit(profile, habit, { name, difficulty, days, save }) {
   try {
     const updated = await api(`/api/habits/${habit.id}${profileQuery(profile)}`, {
       method: 'PATCH',
-      body: JSON.stringify({ name: trimmed, difficulty, days }),
+      body: JSON.stringify({ name: trimmed, difficulty, urgency, days }),
     });
     Object.assign(habit, updated);
     editingKey = null;
@@ -2358,6 +2895,7 @@ els.appIcon.addEventListener('click', () => setIconPanelOpen(els.iconPanel.hidde
 els.iconPanelClose.addEventListener('click', () => setIconPanelOpen(false));
 els.iconForm.addEventListener('submit', addIcon);
 els.etherForm.addEventListener('submit', saveEtherFactor);
+els.urgencyForm.addEventListener('submit', saveUrgencyFactor);
 els.habitSound.addEventListener('change', () => saveSoundChoice('habit', els.habitSound.value));
 els.purchaseSound.addEventListener('change', () =>
   saveSoundChoice('purchase', els.purchaseSound.value),
@@ -2373,6 +2911,12 @@ els.soundForm.addEventListener('submit', addSound);
 els.shopForm.addEventListener('submit', addShopItem);
 els.shopAddToggle.addEventListener('click', () => setShopFormOpen(true));
 els.shopFormClose.addEventListener('click', () => setShopFormOpen(false));
+els.jobForm.addEventListener('submit', addJob);
+els.jobActor.addEventListener('change', () => selectJobActor(els.jobActor.value));
+wireJobDrop(els.jobCompletedBox, (id) => {
+  const job = jobs.inProgress.find((entry) => entry.id === id);
+  if (job) completeJob(job);
+});
 els.appearanceToggle.addEventListener('click', () => {
   applyAppearance(appearance === 'light' ? 'dark' : 'light');
 });
@@ -2395,6 +2939,11 @@ document.addEventListener('visibilitychange', () => {
 setInterval(() => {
   if (today && localDayKey() !== today) load({ silent: true });
 }, 60 * 1000);
+
+// Keep the shared job board fresh so everyone sees a job being taken.
+setInterval(() => {
+  if (PAGE === 'jobs' && !document.hidden) refreshJobsQuietly();
+}, 10 * 1000);
 
 applyPage();
 applyDashboardView();
