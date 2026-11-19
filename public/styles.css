@@ -2830,10 +2830,42 @@ body[data-page="jobs"] .page-title {
   border-color: rgba(var(--chrome-rgb), 0.25);
 }
 
-.chip-penalty {
+.hearts {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
   color: var(--danger-text);
-  background: rgba(var(--danger-rgb), 0.1);
-  border-color: rgba(var(--danger-rgb), 0.3);
+}
+
+.heart {
+  position: relative;
+  display: inline-grid;
+  width: 13px;
+  height: 13px;
+}
+
+.heart svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.heart-base {
+  fill: currentColor;
+  opacity: 0.18;
+}
+
+.heart-fill {
+  fill: currentColor;
+}
+
+.heart[data-fill="empty"] .heart-fill {
+  display: none;
+}
+
+.heart[data-fill="half"] .heart-fill {
+  clip-path: inset(0 50% 0 0);
 }
 
 .stars {
@@ -3884,6 +3916,35 @@ body[data-page="jobs"] .app {
   .icon-grid {
     grid-template-columns: repeat(auto-fill, minmax(58px, 1fr));
   }
+}
+
+/* Drag-to-reorder feedback shared by habits, shop items, and job cards. */
+.habit[draggable="true"],
+.shop-item[draggable="true"],
+.shop-tile[draggable="true"],
+.job-card[draggable="true"] {
+  cursor: grab;
+}
+
+.habit.is-dragging,
+.shop-item.is-dragging,
+.shop-tile.is-dragging,
+.job-card.is-dragging {
+  opacity: 0.45;
+}
+
+.habit.drop-before,
+.shop-item.drop-before,
+.shop-tile.drop-before,
+.job-card.drop-before {
+  box-shadow: 0 -3px 0 -1px var(--chrome-bright);
+}
+
+.habit.drop-after,
+.shop-item.drop-after,
+.shop-tile.drop-after,
+.job-card.drop-after {
+  box-shadow: 0 3px 0 -1px var(--chrome-bright);
 }
 
 @media (prefers-reduced-motion: reduce) {

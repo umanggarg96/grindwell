@@ -53,8 +53,8 @@ Meditate
   on each habit card as stars out of five: difficulty 2 is one star, 3 is one and a half, and 10 is
   five stars.
 - **Urgency** is a whole number from 0 to 10 and defaults to **1**. It sets the penalty for missing a
-  scheduled day; `0` disables penalties. A habit card shows a `−N if missed` chip when urgency is
-  above zero.
+  scheduled day; `0` disables penalties. A habit card shows the missed-damage rating as hearts out of
+  five when urgency is above zero: urgency 1 is half a heart, 5 is two and a half, and 10 is five.
 - **Days** are the days you want to *skip* (rest days): `mo`, `tu`, `we`, `th`, `fr`, `sa`, `su`
   (three-letter and full names work too), separated by commas and/or spaces. With no days, the
   habit runs every day.
@@ -253,6 +253,21 @@ Removing a recurring card with **×** skips only that occurrence: the series kee
 fresh card on its next day, with no reward and no penalty for the skipped one. Recurring cards carry a
 **↻ Mon, Wed** chip. A **Recurring** panel under the board lists every series with its days, reward,
 and ETA; **Stop** ends the series and clears any card still waiting in the inbox.
+
+## Reordering cards
+
+Cards can be rearranged by dragging them — there are no drag handles or move buttons. The new order
+is saved in `data.json`, so it survives reloads and applies to every browser.
+
+- **Habits:** drag a card up or down within the active profile's list. Rest-day habits stay grouped
+  at the bottom, so a drag keeps them in their own group.
+- **Shop:** drag tiles within **Consumables** or cards within **Rewards**. Items do not move between
+  the two sections.
+- **Jobs:** drag a card up or down inside its own column. Dropping an Inbox card on **In progress**,
+  or an in-progress card on **Completed**, still takes or completes the job as before.
+
+Existing cards keep their current layout the first time this runs; new cards are added at the end of
+their list.
 
 ## Resetting
 

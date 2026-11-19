@@ -157,6 +157,8 @@ const APPEARANCE_COLORS = { dark: '#100d0b', light: '#f6f2ec' };
 const SVG_NS = 'http://www.w3.org/2000/svg';
 const STAR_PATH =
   'M12 2.2l2.94 6.02 6.64.96-4.79 4.67 1.13 6.61L12 17.36l-5.92 3.1 1.13-6.61L2.42 9.18l6.64-.96L12 2.2z';
+const HEART_PATH =
+  'M12 21.35l-1.45-1.32C5.4 15.36 2 12.28 2 8.5 2 5.42 4.42 3 7.5 3c1.74 0 3.41.81 4.5 2.09C13.09 3.81 14.76 3 16.5 3 19.58 3 22 5.42 22 8.5c0 3.78-3.4 6.86-8.55 11.54L12 21.35z';
 
 let profiles = [];
 let settings = {
@@ -341,6 +343,30 @@ function starRating(difficulty) {
       `<svg class="star-base" viewBox="0 0 24 24" aria-hidden="true"><path d="${STAR_PATH}"/></svg>` +
       `<svg class="star-fill" viewBox="0 0 24 24" aria-hidden="true"><path d="${STAR_PATH}"/></svg>`;
     wrap.append(star);
+  }
+
+  return wrap;
+}
+
+// Urgency is stored 0–10 but shown as 0–5 hearts: 1 is half a heart and 10 is
+// five, so the filled hearts read as the damage a missed habit costs.
+function damageHearts(urgency) {
+  const rating = Math.max(0, Math.min(5, Number(urgency) / 2));
+  const wrap = document.createElement('span');
+  wrap.className = 'hearts';
+  wrap.setAttribute('role', 'img');
+  wrap.setAttribute('aria-label', `Damage ${rating} out of 5 hearts if missed`);
+  wrap.title = `Urgency ${urgency} of 10 · ${rating} hearts damage if missed`;
+
+  for (let index = 1; index <= 5; index += 1) {
+    const fill = rating >= index ? 'full' : rating >= index - 0.5 ? 'half' : 'empty';
+    const heart = document.createElement('span');
+    heart.className = 'heart';
+    heart.dataset.fill = fill;
+    heart.innerHTML =
+      `<svg class="heart-base" viewBox="0 0 24 24" aria-hidden="true"><path d="${HEART_PATH}"/></svg>` +
+      `<svg class="heart-fill" viewBox="0 0 24 24" aria-hidden="true"><path d="${HEART_PATH}"/></svg>`;
+    wrap.append(heart);
   }
 
   return wrap;
@@ -730,9 +756,88 @@ function focusAddInput(profileId) {
   input?.focus();
 }
 
+/* ---------- drag to reorder ---------- */
+
+// Shared HTML5 drag reordering for habits, shop items, and job columns. Cards
+// must be direct children of `container` and carry data-id. `accepts` keeps a
+// drag inside one group (a habit group or a jobs column) by id pair.
+function wireReorder(container, { onReorder, accepts = () => true }) {
+  let draggingId = null;
+
+  const clearMarks = () => {
+    for (const card of container.children) card.classList.remove('drop-before', 'drop-after');
+  };
+
+  container.addEventListener('dragstart', (event) => {
+    const card = event.target.closest('[data-id]');
+    if (!card || card.parentElement !== container) return;
+    draggingId = card.dataset.id;
+    if (event.dataTransfer) event.dataTransfer.setData('text/plain', draggingId);
+    card.classList.add('is-dragging');
+  });
+
+  container.addEventListener('dragend', () => {
+    clearMarks();
+    for (const card of container.children) card.classList.remove('is-dragging');
+    draggingId = null;
+  });
+
+  container.addEventListener('dragover', (event) => {
+    if (!draggingId) return;
+    const card = event.target.closest('[data-id]');
+    if (!card || card.parentElement !== container || card.dataset.id === draggingId) return;
+    if (!accepts(draggingId, card.dataset.id)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    if (event.dataTransfer) event.dataTransfer.dropEffect = 'move';
+    clearMarks();
+    card.classList.add(isBefore(card, event.clientY) ? 'drop-before' : 'drop-after');
+  });
+
+  container.addEventListener('dragleave', (event) => {
+    if (container.contains(event.relatedTarget)) return;
+    clearMarks();
+  });
+
+  container.addEventListener('drop', (event) => {
+    if (!draggingId) return;
+    const card = event.target.closest('[data-id]');
+    if (!card || card.parentElement !== container || card.dataset.id === draggingId) return;
+    if (!accepts(draggingId, card.dataset.id)) return;
+    event.preventDefault();
+    event.stopPropagation();
+    const before = isBefore(card, event.clientY);
+    clearMarks();
+    const ids = [...container.children].filter((node) => node.dataset.id).map((node) => node.dataset.id);
+    const from = ids.indexOf(draggingId);
+    ids.splice(from, 1);
+    let to = ids.indexOf(card.dataset.id);
+    if (!before) to += 1;
+    ids.splice(to, 0, draggingId);
+    draggingId = null;
+    onReorder(ids);
+  });
+}
+
+function isBefore(card, clientY) {
+  const rect = card.getBoundingClientRect();
+  return clientY < rect.top + rect.height / 2;
+}
+
+async function reorderCards(path, ids) {
+  try {
+    await api(path, { method: 'POST', body: JSON.stringify({ ids }) });
+    await load();
+  } catch (error) {
+    toast(error.message);
+    await load();
+  }
+}
+
 function habitNode(profile, habit) {
   const li = document.createElement('li');
   li.dataset.id = habit.id;
+  li.dataset.group = habit.dueToday ? 'due' : 'rest';
   li.className =
     'habit' + (habit.doneToday ? ' is-done' : '') + (habit.dueToday ? '' : ' is-rest');
 
@@ -742,6 +847,7 @@ function habitNode(profile, habit) {
     li.append(editFormNode(profile, habit));
     return li;
   }
+  li.draggable = true;
 
   const check = document.createElement('button');
   check.type = 'button';
@@ -779,11 +885,7 @@ function habitNode(profile, habit) {
   meta.append(streak, starRating(habit.difficulty));
 
   if (habit.urgency > 0 && habit.penalty > 0) {
-    const penalty = document.createElement('span');
-    penalty.className = 'chip chip-penalty';
-    penalty.textContent = `−${habit.penalty} if missed`;
-    penalty.title = `Urgency ${habit.urgency} of 10`;
-    meta.append(penalty);
+    meta.append(damageHearts(habit.urgency));
   }
 
   if (!habit.dueToday) {
@@ -1085,9 +1187,19 @@ function profileSection(profile) {
   list.className = 'habits';
   list.setAttribute('aria-label', `${profile.name} habits`);
 
-  // Rest-day habits stay visible but sink below today's work.
+  // Rest-day habits stay visible but sink below today's work. The stable sort
+  // keeps the saved manual order inside each group.
   const ordered = [...profile.habits].sort((a, b) => Number(b.dueToday) - Number(a.dueToday));
   list.replaceChildren(...ordered.map((habit) => habitNode(profile, habit)));
+  wireReorder(list, {
+    accepts: (aId, bId) => {
+      const a = profile.habits.find((habit) => habit.id === aId);
+      const b = profile.habits.find((habit) => habit.id === bId);
+      return Boolean(a && b && a.dueToday === b.dueToday);
+    },
+    onReorder: (ids) =>
+      reorderCards(`/api/habits/reorder?profile=${encodeURIComponent(profile.id)}`, ids),
+  });
   section.append(list);
 
   const empty = document.createElement('p');
@@ -1640,6 +1752,8 @@ function shopItemCard(item) {
   const purchased = itemPurchased(item);
   const card = document.createElement('article');
   card.className = 'shop-item' + (purchased ? ' is-purchased' : '');
+  card.dataset.id = item.id;
+  card.draggable = true;
 
   const body = document.createElement('div');
   body.className = 'shop-item-body';
@@ -1654,6 +1768,7 @@ function shopItemCard(item) {
   title.rel = 'noopener noreferrer';
   title.textContent = item.name;
   title.title = `Open ${item.name}`;
+  title.draggable = false;
 
   const remove = document.createElement('button');
   remove.type = 'button';
@@ -1714,6 +1829,8 @@ function shopTileCard(item) {
 
   const card = document.createElement('article');
   card.className = 'shop-tile';
+  card.dataset.id = item.id;
+  card.draggable = true;
 
   const media = shopImage(item);
   media.classList.add('shop-tile-media');
@@ -1736,6 +1853,7 @@ function shopTileCard(item) {
   name.rel = 'noopener noreferrer';
   name.textContent = item.name;
   name.title = `Open ${item.name}`;
+  name.draggable = false;
 
   const buy = document.createElement('button');
   buy.type = 'button';
@@ -1798,6 +1916,9 @@ function shopSection(title, note, items, { className = 'shop-list', card = shopI
   const list = document.createElement('div');
   list.className = className;
   list.append(...items.map((item) => card(item)));
+  wireReorder(list, {
+    onReorder: (ids) => reorderCards('/api/shop/items/reorder', ids),
+  });
 
   section.append(head, list);
   return section;
@@ -2208,10 +2329,11 @@ function renderJobRecurring() {
   els.jobRecurringList.replaceChildren(...jobRecurring.map(recurringRow));
 }
 
-function jobCard(job, { draggable = false } = {}) {
+function jobCard(job) {
   const card = document.createElement('article');
   card.className = `job-card is-${job.status}`;
   card.dataset.id = job.id;
+  card.draggable = true;
   card.setAttribute('role', 'listitem');
 
   const title = document.createElement('p');
@@ -2290,11 +2412,8 @@ function jobCard(job, { draggable = false } = {}) {
 
   card.append(title, meta, foot);
 
-  if (draggable) {
-    card.draggable = true;
-    card.addEventListener('dragstart', (event) => startJobDrag(event, job));
-    card.addEventListener('dragend', endJobDrag);
-  }
+  card.addEventListener('dragstart', (event) => startJobDrag(event, job));
+  card.addEventListener('dragend', endJobDrag);
 
   return card;
 }
@@ -2329,6 +2448,23 @@ function wireJobDrop(node, onDrop) {
     node.classList.remove('is-drop');
     const id = event.dataTransfer ? event.dataTransfer.getData('text/plain') : '';
     if (id) onDrop(id);
+  });
+}
+
+function findAnyJob(id) {
+  return [...jobs.inbox, ...jobs.inProgress, ...jobs.completed, ...jobs.failed].find(
+    (job) => job.id === id,
+  );
+}
+
+function wireJobColumn(list) {
+  wireReorder(list, {
+    accepts: (aId, bId) => {
+      const a = findAnyJob(aId);
+      const b = findAnyJob(bId);
+      return Boolean(a && b && a.status === b.status);
+    },
+    onReorder: (ids) => reorderCards('/api/jobs/reorder', ids),
   });
 }
 
@@ -2394,13 +2530,11 @@ function renderJobActor() {
 function renderJobs() {
   renderJobActor();
 
-  els.jobInbox.replaceChildren(...jobs.inbox.map((job) => jobCard(job, { draggable: true })));
+  els.jobInbox.replaceChildren(...jobs.inbox.map((job) => jobCard(job)));
   els.jobInboxEmpty.hidden = jobs.inbox.length > 0;
   els.jobInboxCount.textContent = String(jobs.inbox.length);
 
-  els.jobProgress.replaceChildren(
-    ...jobs.inProgress.map((job) => jobCard(job, { draggable: true })),
-  );
+  els.jobProgress.replaceChildren(...jobs.inProgress.map((job) => jobCard(job)));
   els.jobProgressEmpty.hidden = jobs.inProgress.length > 0;
   els.jobProgressCount.textContent = String(jobs.inProgress.length);
   renderJobLegend();
@@ -3251,6 +3385,10 @@ wireJobDrop(els.jobCompletedBox, (id) => {
   const job = jobs.inProgress.find((entry) => entry.id === id);
   if (job) completeJob(job);
 });
+wireJobColumn(els.jobInbox);
+wireJobColumn(els.jobProgress);
+wireJobColumn(els.jobCompleted);
+wireJobColumn(els.jobFailed);
 els.appearanceToggle.addEventListener('click', () => {
   applyAppearance(appearance === 'light' ? 'dark' : 'light');
 });

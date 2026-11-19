@@ -191,6 +191,73 @@ function startOfDayKey(key) {
   return new Date(year, month - 1, date);
 }
 
+// Manual card order is a whole number stored on each card. Legacy cards have
+// none; their array position already matches what the UI shows today, so a
+// one-time sequential assignment preserves the current layout.
+function parseOrder(value) {
+  const number = wholeNumber(value);
+  return Number.isFinite(number) ? Math.trunc(number) : null;
+}
+
+function ensureOrders(list) {
+  if (!Array.isArray(list)) return false;
+  let changed = false;
+  let next = -1;
+  for (const entry of list) {
+    const order = parseOrder(entry.order);
+    if (order === null) {
+      next += 1;
+      entry.order = next;
+      changed = true;
+    } else {
+      next = Math.max(next, order);
+    }
+  }
+  return changed;
+}
+
+// Fill in missing orders once, at load time, so legacy data keeps the layout
+// it already had. Array position matches what the UI shows today.
+function ensureAllOrders(target) {
+  let changed = false;
+  for (const profile of target.profiles || []) {
+    if (ensureOrders(profile.habits)) changed = true;
+  }
+  if (ensureOrders(target.shop && target.shop.items)) changed = true;
+  if (ensureOrders(target.jobs)) changed = true;
+  return changed;
+}
+
+function nextOrder(list) {
+  const orders = list.map((entry) => parseOrder(entry.order)).filter((value) => value !== null);
+  return orders.length === 0 ? 0 : Math.max(...orders) + 1;
+}
+
+// Validate a client-supplied id list, then stamp new orders above every card
+// already in the list. Jobs sort in reverse, so the first id ends up on top.
+function applyOrder(ids, list, reverse = false) {
+  if (!Array.isArray(ids) || ids.length === 0) {
+    throw httpError(400, 'Provide the new card order.');
+  }
+  const byId = new Map(list.map((entry) => [entry.id, entry]));
+  const seen = new Set();
+  const base = nextOrder(list);
+  ids.forEach((id, index) => {
+    if (typeof id !== 'string' || !byId.has(id) || seen.has(id)) {
+      throw httpError(400, 'The order contains an unknown or repeated card.');
+    }
+    seen.add(id);
+    byId.get(id).order = reverse ? base + (ids.length - 1 - index) : base + index;
+  });
+}
+
+function byOrder(reverse = false) {
+  return (a, b) =>
+    reverse
+      ? (parseOrder(b.order) ?? 0) - (parseOrder(a.order) ?? 0)
+      : (parseOrder(a.order) ?? 0) - (parseOrder(b.order) ?? 0);
+}
+
 function currentStreak(completions, days = ALL_DAYS) {
   const done = new Set(completions);
   const scheduled = new Set(days);
@@ -700,6 +767,7 @@ function toPublic(habit) {
   const earned = earningsOf(habit)[todayKey];
   return {
     id: habit.id,
+    order: parseOrder(habit.order) ?? 0,
     name: habit.name,
     createdAt: habit.createdAt,
     difficulty,
@@ -779,7 +847,7 @@ function overviewProfile(profile) {
   return {
     ...toPublicProfile(profile),
     summary: etherSummary(profile),
-    habits: profile.habits.map(toPublic),
+    habits: profile.habits.slice().sort(byOrder()).map(toPublic),
   };
 }
 
@@ -911,6 +979,7 @@ function shopItemsOf() {
 function toPublicShopItem(item) {
   return {
     id: item.id,
+    order: parseOrder(item.order) ?? 0,
     name: item.name,
     link: item.link,
     cost: item.cost,
@@ -923,7 +992,7 @@ function toPublicShopItem(item) {
 }
 
 function publicShop() {
-  return { items: shopItemsOf().map(toPublicShopItem) };
+  return { items: shopItemsOf().slice().sort(byOrder()).map(toPublicShopItem) };
 }
 
 function findShopItem(id) {
@@ -963,8 +1032,10 @@ function normalizeShopItem(item, profileIds) {
   const excludedProfiles = Array.isArray(item.excludedProfiles)
     ? [...new Set(item.excludedProfiles.filter((id) => typeof id === 'string' && profileIds.has(id)))]
     : [];
+  const order = parseOrder(item.order);
 
   const changed =
+    order !== (item.order ?? null) ||
     name !== item.name ||
     link !== item.link ||
     cost !== item.cost ||
@@ -979,6 +1050,7 @@ function normalizeShopItem(item, profileIds) {
   return {
     item: {
       id: item.id,
+      order,
       name,
       link,
       cost,
@@ -1227,6 +1299,7 @@ function toPublicRecurring(template) {
 function makeOccurrence(template, createdAt = new Date()) {
   return {
     id: crypto.randomUUID(),
+    order: nextOrder(jobsOf()),
     templateId: template.id,
     title: template.title,
     reward: template.reward,
@@ -1317,6 +1390,7 @@ function normalizeJob(raw, profileIds) {
 
   return {
     id: raw.id,
+    order: parseOrder(raw.order),
     templateId,
     title,
     reward,
@@ -1337,6 +1411,7 @@ function normalizeJob(raw, profileIds) {
 function toPublicJob(job) {
   return {
     id: job.id,
+    order: parseOrder(job.order) ?? 0,
     templateId: job.templateId || null,
     title: job.title,
     reward: job.reward,
@@ -1360,25 +1435,31 @@ function newestFirst(a, b, field) {
 
 // The board only needs open work plus the newest finished jobs. Older terminal
 // jobs stay in data.json as history but are not sent to the client.
+// Each column keeps its own manual order. Higher order sits on top, matching
+// the previous newest-first layout; the timestamp is only a legacy tiebreak.
+function boardOrder(a, b) {
+  return byOrder(true)(a, b) || newestFirst(a, b, 'createdAt');
+}
+
 function publicJobs() {
   const jobs = jobsOf();
   const completed = jobs
     .filter((job) => job.status === 'completed')
-    .sort((a, b) => newestFirst(a, b, 'completedAt'))
+    .sort(boardOrder)
     .slice(0, TERMINAL_JOBS_SHOWN);
   const failed = jobs
     .filter((job) => job.status === 'failed')
-    .sort((a, b) => newestFirst(a, b, 'failedAt'))
+    .sort(boardOrder)
     .slice(0, TERMINAL_JOBS_SHOWN);
 
   return {
     inbox: jobs
       .filter((job) => job.status === 'inbox')
-      .sort((a, b) => newestFirst(a, b, 'createdAt'))
+      .sort(boardOrder)
       .map(toPublicJob),
     inProgress: jobs
       .filter((job) => job.status === 'inProgress')
-      .sort((a, b) => newestFirst(a, b, 'startedAt'))
+      .sort(boardOrder)
       .map(toPublicJob),
     completed: completed.map(toPublicJob),
     failed: failed.map(toPublicJob),
@@ -1683,6 +1764,7 @@ async function loadState() {
         recurring,
         activeProfileId,
       };
+      if (ensureAllOrders(state)) changed = true;
       if (changed) await saveState();
       return;
     }
@@ -1712,6 +1794,7 @@ async function loadState() {
       recurring: [],
       activeProfileId: profile.id,
     };
+    ensureAllOrders(state);
     await saveState();
   } catch (error) {
     if (error.code !== 'ENOENT') {
@@ -1727,6 +1810,7 @@ async function loadState() {
         recurring: state.recurring && Array.isArray(state.recurring) ? state.recurring : [],
         activeProfileId: profile.id,
       };
+      ensureAllOrders(state);
       await saveState();
     }
   }
@@ -2247,6 +2331,7 @@ async function handleApi(req, res, pathname, url) {
     }
     const item = {
       id: crypto.randomUUID(),
+      order: nextOrder(shopItemsOf()),
       name: parseItemName(body.name),
       link: parseShopUrl(body.link, 'Link'),
       cost: parseItemCost(body.cost),
@@ -2259,6 +2344,17 @@ async function handleApi(req, res, pathname, url) {
     shopItemsOf().push(item);
     await saveState();
     return sendJson(res, 201, toPublicShopItem(item));
+  }
+
+  if (pathname === '/api/shop/items/reorder') {
+    if (req.method !== 'POST') throw httpError(405, 'Method not allowed.');
+    const body = await readJson(req);
+    applyOrder(body.ids, shopItemsOf());
+    await saveState();
+    return sendJson(res, 200, {
+      ...publicShop(),
+      profiles: state.profiles.map(toPublicProfile),
+    });
   }
 
   const buyMatch = pathname.match(/^\/api\/shop\/items\/([\w-]+)\/buy$/);
@@ -2350,6 +2446,7 @@ async function handleApi(req, res, pathname, url) {
 
       const job = {
         id: crypto.randomUUID(),
+        order: nextOrder(jobsOf()),
         templateId: null,
         title,
         reward,
@@ -2371,6 +2468,17 @@ async function handleApi(req, res, pathname, url) {
     }
 
     throw httpError(405, 'Method not allowed.');
+  }
+
+  if (pathname === '/api/jobs/reorder') {
+    if (req.method !== 'POST') throw httpError(405, 'Method not allowed.');
+    const body = await readJson(req);
+    applyOrder(body.ids, jobsOf(), true);
+    await saveState();
+    return sendJson(res, 200, {
+      jobs: publicJobs(),
+      profiles: state.profiles.map(toPublicProfile),
+    });
   }
 
   const takeJobMatch = pathname.match(/^\/api\/jobs\/([\w-]+)\/take$/);
@@ -2477,7 +2585,7 @@ async function handleApi(req, res, pathname, url) {
     if (req.method === 'GET') {
       return sendJson(res, 200, {
         today: dayKey(),
-        habits: profile.habits.map(toPublic),
+        habits: profile.habits.slice().sort(byOrder()).map(toPublic),
         profile: toPublicProfile(profile),
         profiles: state.profiles.map(toPublicProfile),
         settings: state.settings,
@@ -2493,6 +2601,7 @@ async function handleApi(req, res, pathname, url) {
 
       const habit = {
         id: crypto.randomUUID(),
+        order: nextOrder(profile.habits),
         name: parseName(body.name),
         createdAt: new Date().toISOString(),
         difficulty: body.difficulty === undefined ? DEFAULT_DIFFICULTY : parseDifficulty(body.difficulty),
@@ -2521,6 +2630,17 @@ async function handleApi(req, res, pathname, url) {
     }
 
     throw httpError(405, 'Method not allowed.');
+  }
+
+  if (pathname === '/api/habits/reorder') {
+    if (req.method !== 'POST') throw httpError(405, 'Method not allowed.');
+    const body = await readJson(req);
+    applyOrder(body.ids, profile.habits);
+    await saveState();
+    return sendJson(res, 200, {
+      habits: profile.habits.slice().sort(byOrder()).map(toPublic),
+      profile: toPublicProfile(profile),
+    });
   }
 
   const toggleMatch = pathname.match(/^\/api\/habits\/([\w-]+)\/toggle$/);

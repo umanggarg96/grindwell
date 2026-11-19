@@ -184,6 +184,12 @@ try {
       seededRaw.profiles[0].habits.length === 5 &&
       seededRaw.activeProfileId === seededRaw.profiles[0].id,
   );
+  check(
+    'legacy habits get sequential orders on migration',
+    seededRaw.profiles[0].habits.every((habit, index) => habit.order === index) &&
+      [...seeded.values()].every((habit) => Number.isInteger(habit.order)),
+    JSON.stringify(seededRaw.profiles[0].habits.map((habit) => habit.order)),
+  );
 
   const weeklyToday = seeded.get('weekly-today');
   check(
@@ -1557,14 +1563,15 @@ try {
       !js.includes('`+${habit.reward} ether`'),
   );
   check(
-    'habit cards show the missed penalty and the editor sets urgency',
+    'habit cards show missed damage as hearts and the editor sets urgency',
     js.includes('habit.urgency > 0 && habit.penalty > 0') &&
-      js.includes('chip chip-penalty') &&
-      js.includes('`−${habit.penalty} if missed`') &&
+      js.includes('damageHearts(habit.urgency)') &&
+      js.includes('function damageHearts') &&
+      js.includes('Number(urgency) / 2') &&
       js.includes("urgencyLabel.textContent = 'Urgency'") &&
       js.includes('function syncUrgency') &&
       js.includes('urgency: Number(urgencyInput.value)') &&
-      css.includes('.chip-penalty'),
+      css.includes('.heart[data-fill="half"]'),
   );
   check(
     'star styles present',
@@ -3372,6 +3379,151 @@ try {
       pageMock.closeAllConnections?.();
     });
   }
+
+  console.log('\ncard reordering');
+
+  r = await call('/api/profiles', {
+    method: 'POST',
+    ...json({ name: 'Order Tester', theme: 'teal' }),
+  });
+  const orderProfile = r.body.id;
+
+  const orderHabits = [];
+  for (const name of ['Order A', 'Order B', 'Order C']) {
+    r = await call(`/api/habits?profile=${orderProfile}`, {
+      method: 'POST',
+      ...json({ name }),
+    });
+    orderHabits.push(r.body.id);
+  }
+  check(
+    'new habits carry a whole-number order',
+    Number.isInteger(r.body.order) && r.body.order >= 0,
+    JSON.stringify(r.body),
+  );
+  r = await call(`/api/habits?profile=${orderProfile}`);
+  check(
+    'habits start in creation order',
+    r.body.habits.map((habit) => habit.id).join(',') === orderHabits.join(','),
+    JSON.stringify(r.body.habits.map((habit) => habit.id)),
+  );
+
+  const reversedHabits = [...orderHabits].reverse();
+  r = await call(`/api/habits/reorder?profile=${orderProfile}`, {
+    method: 'POST',
+    ...json({ ids: reversedHabits }),
+  });
+  check('habit reorder accepts a valid list', r.status === 200, `${r.status} ${JSON.stringify(r.body)}`);
+  r = await call(`/api/habits?profile=${orderProfile}`);
+  check(
+    'habit order is returned by the API',
+    r.body.habits.map((habit) => habit.id).join(',') === reversedHabits.join(','),
+    JSON.stringify(r.body.habits.map((habit) => habit.id)),
+  );
+  let orderDisk = JSON.parse(await fs.readFile(dataFile, 'utf8'));
+  let orderProfileDisk = orderDisk.profiles.find((profile) => profile.id === orderProfile);
+  const habitOrder = new Map(orderProfileDisk.habits.map((habit) => [habit.id, habit.order]));
+  check(
+    'habit order persists in data.json',
+    habitOrder.get(reversedHabits[0]) < habitOrder.get(reversedHabits[2]),
+    JSON.stringify([...habitOrder]),
+  );
+
+  r = await call(`/api/habits/reorder?profile=${orderProfile}`, {
+    method: 'POST',
+    ...json({ ids: [reversedHabits[0], reversedHabits[0]] }),
+  });
+  check('habit reorder rejects repeated ids', r.status === 400, String(r.status));
+  r = await call(`/api/habits/reorder?profile=${orderProfile}`, {
+    method: 'POST',
+    ...json({ ids: ['not-a-habit'] }),
+  });
+  check('habit reorder rejects unknown ids', r.status === 400, String(r.status));
+  r = await call('/api/habits/reorder?profile=not-a-profile', {
+    method: 'POST',
+    ...json({ ids: reversedHabits }),
+  });
+  check('habit reorder rejects unknown profiles', r.status === 404, String(r.status));
+
+  const orderItems = [];
+  for (const name of ['Item A', 'Item B', 'Item C']) {
+    r = await call('/api/shop/items', {
+      method: 'POST',
+      ...json({ name, link: `https://example.com/${name.replace(' ', '-')}`, cost: 1 }),
+    });
+    orderItems.push(r.body.id);
+  }
+  check('new shop items carry a whole-number order', Number.isInteger(r.body.order));
+  const reversedItems = [...orderItems].reverse();
+  r = await call('/api/shop/items/reorder', {
+    method: 'POST',
+    ...json({ ids: reversedItems }),
+  });
+  check('shop reorder accepts a valid list', r.status === 200, `${r.status} ${JSON.stringify(r.body)}`);
+  r = await call('/api/shop');
+  check(
+    'shop order is returned by the API',
+    r.body.items.filter((item) => orderItems.includes(item.id)).map((item) => item.id).join(',') ===
+      reversedItems.join(','),
+    JSON.stringify(r.body.items.map((item) => item.id)),
+  );
+  orderDisk = JSON.parse(await fs.readFile(dataFile, 'utf8'));
+  const itemOrder = new Map(
+    orderDisk.shop.items.filter((item) => orderItems.includes(item.id)).map((item) => [item.id, item.order]),
+  );
+  check(
+    'shop order persists in data.json',
+    itemOrder.get(reversedItems[0]) < itemOrder.get(reversedItems[2]),
+    JSON.stringify([...itemOrder]),
+  );
+
+  const orderJobs = [];
+  for (const title of ['Order job A', 'Order job B', 'Order job C']) {
+    r = await call('/api/jobs', {
+      method: 'POST',
+      ...json({ title, reward: 5, etaMinutes: 60 }),
+    });
+    orderJobs.push(r.body.job.id);
+  }
+  check('new jobs carry a whole-number order', Number.isInteger(r.body.job.order));
+  const reversedJobs = [...orderJobs].reverse();
+  r = await call('/api/jobs/reorder', {
+    method: 'POST',
+    ...json({ ids: reversedJobs }),
+  });
+  check('job reorder accepts a valid list', r.status === 200, `${r.status} ${JSON.stringify(r.body)}`);
+  r = await call('/api/jobs');
+  check(
+    'job order is returned by the API',
+    r.body.jobs.inbox.filter((job) => orderJobs.includes(job.id)).map((job) => job.id).join(',') ===
+      reversedJobs.join(','),
+    JSON.stringify(r.body.jobs.inbox.map((job) => job.id)),
+  );
+  orderDisk = JSON.parse(await fs.readFile(dataFile, 'utf8'));
+  const jobOrder = new Map(
+    orderDisk.jobs.filter((job) => orderJobs.includes(job.id)).map((job) => [job.id, job.order]),
+  );
+  check(
+    'job order persists in data.json',
+    jobOrder.get(reversedJobs[0]) > jobOrder.get(reversedJobs[2]),
+    JSON.stringify([...jobOrder]),
+  );
+  r = await call('/api/jobs/reorder', {
+    method: 'POST',
+    ...json({ ids: [reversedJobs[0], 'not-a-job'] }),
+  });
+  check('job reorder rejects unknown ids', r.status === 400, String(r.status));
+
+  check(
+    'frontend wires drag reordering across all three lists',
+    js.includes('function wireReorder') &&
+      js.includes('function reorderCards') &&
+      js.includes('/api/habits/reorder') &&
+      js.includes('/api/shop/items/reorder') &&
+      js.includes('/api/jobs/reorder') &&
+      css.includes('.drop-before') &&
+      css.includes('.drop-after'),
+  );
 
   console.log(`\n${failures === 0 ? 'all checks passed' : `${failures} check(s) failed`}`);
 } finally {

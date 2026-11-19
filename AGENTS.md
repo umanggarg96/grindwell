@@ -283,6 +283,10 @@ shop items. Check both appearances: the toggle must flip `<html data-appearance>
 Key rules:
 
 - Weekdays are JavaScript numbers: **0 = Sunday … 6 = Saturday**.
+- Every habit, shop item, and job carries a whole-number `order` for drag-only manual sorting.
+  Legacy cards get sequential orders from their array position on first load. Habits and shop items
+  sort ascending; jobs sort descending so the first id in a reorder request sits on top of its column.
+  Reordering is scoped to one habit profile, one shop section, or one job column.
 - `days` means **scheduled** days, not skipped days. All seven means daily.
 - `completions`, `earnings`, and `penalties` keys are local calendar dates `YYYY-MM-DD`.
 - `earnings[date]` is the ether locked in when that completion was recorded.
@@ -345,13 +349,16 @@ Key rules:
 | `PATCH` | `/api/shop/items/:id` | any of `name`, `link`, `cost`, `image`, `excludedProfiles` |
 | `DELETE` | `/api/shop/items/:id` | `204` |
 | `POST` | `/api/shop/items/:id/buy` | splits the cost and returns `{ item, contributions[], profiles[] }` |
+| `POST` | `/api/shop/items/reorder` | `{ ids[] }`; saves the manual order of all shop items |
 | `GET` | `/api/jobs` | `{ today, now, activeProfileId, profiles[], jobs, limits }` |
 | `POST` | `/api/jobs` | `{ title, reward, etaMinutes }`; adds to the inbox |
+| `POST` | `/api/jobs/reorder` | `{ ids[] }`; saves the manual order of those jobs (first id ends up on top) |
 | `POST` | `/api/jobs/:id/take` | accepts `?profile=<id>`; enforces the in-progress limit |
 | `POST` | `/api/jobs/:id/complete` | scores elapsed time, records the payout, returns `{ job, jobs, profiles[] }` |
 | `DELETE` | `/api/jobs/:id` | `204`; inbox jobs only |
 | `GET` | `/api/habits` | active profile by default; accepts `?profile=<id>` |
 | `POST` | `/api/habits` | `{ name, difficulty?, urgency?, days? }`; accepts `?profile=<id>` |
+| `POST` | `/api/habits/reorder` | `{ ids[] }`; saves the manual order of that profile's habits; accepts `?profile=<id>` |
 | `PATCH` | `/api/habits/:id` | any of `name`, `difficulty`, `urgency`, `days`; accepts `?profile=<id>` |
 | `DELETE` | `/api/habits` | wipes the selected profile's habits, ether, penalties, and spend ledger; accepts `?profile=<id>` |
 | `POST` | `/api/habits/:id/toggle` | `{ done?: boolean }`; accepts `?profile=<id>` |
@@ -436,6 +443,10 @@ Details:
   - `renderShop()` — shop balance, the Consumables and Rewards sections, item cards and tiles,
     progress bars, and contributor checkboxes.
   - `renderSettings()` — ether and urgency factor fields, sound pickers, and the app icon picker.
+- `wireReorder(container, { onReorder, accepts })` is the shared drag handler for habit lists, shop
+  `.shop-list`/`.shop-grid` sections, and each job column. Cards are direct children with `data-id`;
+  `accepts` keeps a drag inside one habit group or one job column. `reorderCards()` posts `{ ids }`
+  and reloads. There are no handles or move buttons. CSS `drop-before`/`drop-after` show the target.
 - `renderSounds()` fills the habit and purchase sound pickers from `SOUND_PRESETS` plus
   `settings.sounds.custom`, renders each custom sound with preview/remove buttons, and hides the
   list when there are none. `saveSoundChoice()`, `addSound()`, and `deleteSound()` persist changes
@@ -455,9 +466,9 @@ Details:
   `section.dataset.theme = profile.theme`.
 - `habitNode(profile, habit)` builds the check button, meta chips, edit button, delete button.
   Difficulty is rendered with `starRating(habit.difficulty)` as 0.5–5 stars. A habit with urgency
-  above zero also shows a `.chip-penalty` reading `−N if missed`. Do not add a reward chip back to
-  the card. Toggles are optimistic; the server response is authoritative. Checking a habit plays a
-  short chime through `playHabitSound()`.
+  above zero shows missed damage with `damageHearts(habit.urgency)` as 0.5–5 hearts (urgency / 2, in
+  the danger colour). Do not add a reward chip back to the card. Toggles are optimistic; the server
+  response is authoritative. Checking a habit plays a short chime through `playHabitSound()`.
 - `editFormNode(profile, habit)` renders the inline editor, including difficulty and urgency range
   inputs. `editingKey` is `${profileId}:${habitId}`. `Esc` closes the editor.
 - `dashboardCard(profile)` sets `card.dataset.theme = profile.theme` and uses `profile.summary`. The
